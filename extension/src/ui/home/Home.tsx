@@ -13,27 +13,31 @@ import { PROTOCOLS } from "@/lib/ui/protocols";
 import { amt, usd } from "@/lib/ui/format";
 import { extensionExecutor } from "../common";
 import { useHome, type Note } from "./useHome";
+import { Funding } from "./Funding";
 
 const ICONS: Record<string, ReactNode> = {
+  fund: <Plus size={18} weight="bold" />,
   send: <ArrowUp size={18} weight="bold" />, receive: <ArrowDown size={18} weight="bold" />, swap: <ArrowsLeftRight size={18} weight="bold" />,
   "stake-sol": <Coins size={18} weight="fill" />, "stake-native": <Coins size={18} weight="fill" />, "kamino-deposit": <Bank size={18} weight="fill" />,
   "marginfi-deposit": <Bank size={18} weight="fill" />, "close-empty-accounts": <Broom size={18} weight="fill" />,
 };
-const LABELS: Record<string, string> = { send: "Send", receive: "Receive", swap: "Swap", "stake-sol": "Stake", "stake-native": "Stake", "kamino-deposit": "Earn", "marginfi-deposit": "Lend", "close-empty-accounts": "Clean up" };
+const LABELS: Record<string, string> = { fund: "Add funds", send: "Send", receive: "Receive", swap: "Swap", "stake-sol": "Stake", "stake-native": "Stake", "kamino-deposit": "Earn", "marginfi-deposit": "Lend", "close-empty-accounts": "Clean up" };
 
 export function Home({ state, active, header, compact }: { state: WalletState; active: AccountMeta; header: ReactNode; compact?: boolean }) {
   const h = useHome(state.apiBase, active.address);
   return (
     <ActionProvider executor={extensionExecutor(state, active)} onDone={() => void h.run({ fresh: true })}>
-      <Body h={h} header={header} compact={compact} watch={active.kind === "watch"} address={active.address} />
+      <Body h={h} header={header} compact={compact} watch={active.kind === "watch"} address={active.address} apiBase={state.apiBase} />
     </ActionProvider>
   );
 }
 
-function Body({ h, header, compact, watch, address }: { h: ReturnType<typeof useHome>; header: ReactNode; compact?: boolean; watch: boolean; address: string }) {
+function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<typeof useHome>; header: ReactNode; compact?: boolean; watch: boolean; address: string; apiBase: string }) {
   const { open } = useActions();
   const [detail, setDetail] = useState<string | null>(null);
   const [receive, setReceive] = useState(false);
+  const [fund, setFund] = useState(false);
+  const [arrived, setArrived] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const snap = h.snap;
 
@@ -45,8 +49,26 @@ function Body({ h, header, compact, watch, address }: { h: ReturnType<typeof use
     else if (i.positionId && i.actionId) { const p = snap.positions.find((x) => x.id === i.positionId); const a = p?.actions.find((x) => x.id === i.actionId); if (p && a) open({ kind: "action", position: p, action: a, params: i.params }); }
   }, [h.intent, snap, h.tools, open, h]);
 
+  const empty = !!snap && snap.netWorthUsd < 1 && !snap.positions.length;
+  const solBal = snap?.tokens.find((t) => t.mint === "So11111111111111111111111111111111111111112")?.amount ?? 0;
+  const lowSol = !!snap && !empty && solBal < 0.003 && !watch;
+
+  // While empty, watch for the first deposit and rebuild the home when it lands.
+  useEffect(() => {
+    if (!empty) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch(`${apiBase}/api/balance?owner=${address}`);
+        const j = await r.json();
+        if (r.ok && j.totalUsd >= 0.5) { clearInterval(id); setArrived(`Funds arrived: $${j.totalUsd.toFixed(2)}`); setFund(false); void h.run({ fresh: true }); }
+      } catch { /* try again next tick */ }
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [empty, apiBase, address, h]);
+
   const runAction = (ref: string) => {
     if (ref === "receive") return setReceive(true);
+    if (ref === "fund") return setFund(true);
     const m = /^pos:(.+):([^:]+)$/.exec(ref);
     if (m && snap) { const p = snap.positions.find((x) => x.id === m[1]); const a = p?.actions.find((x) => x.id === m[2]); if (p && a) open({ kind: "action", position: p, action: a }); return; }
     const t = h.tools.find((x) => x.id === ref);
@@ -89,7 +111,15 @@ function Body({ h, header, compact, watch, address }: { h: ReturnType<typeof use
         {/* What the AI is doing */}
         <Working notes={h.notes} working={h.working} />
 
-        {h.alert && (
+        {arrived && <p className="mx-4 mt-3 rounded-[calc(var(--t-radius)*.8)] bg-pos/14 text-pos px-3 py-2.5 text-[13px] rise">{arrived}</p>}
+        {empty && !watch && <Funding address={address} apiBase={apiBase} compact={compact} />}
+        {lowSol && (
+          <button className="mx-4 mt-3 w-[calc(100%-2rem)] flex items-center gap-2.5 rounded-[calc(var(--t-radius)*.8)] bg-warn/14 text-warn px-3 py-2.5 text-left text-[13px]" onClick={() => setFund(true)}>
+            <Warning size={16} weight="fill" className="shrink-0" /><span className="flex-1">Add a little SOL to pay network fees</span><span className="text-[11px] opacity-70">Add</span>
+          </button>
+        )}
+
+        {h.alert && !empty && (
           <button className={`mx-4 mt-3 w-[calc(100%-2rem)] flex items-center gap-2.5 rounded-[calc(var(--t-radius)*.8)] px-3 py-2.5 text-left text-[13px] rise ${h.alert.tone === "danger" ? "bg-danger/14 text-danger" : h.alert.tone === "warn" ? "bg-warn/14 text-warn" : "bg-panel-2 text-chalk"}`}
             onClick={() => h.alert?.positionId && setDetail(h.alert.positionId)}>
             <Warning size={16} weight="fill" className="shrink-0" /><span className="flex-1">{h.alert.text}</span>{h.alert.positionId && <span className="text-[11px] opacity-70">View</span>}
@@ -101,7 +131,7 @@ function Body({ h, header, compact, watch, address }: { h: ReturnType<typeof use
         {snap && (
           <GenProvider snap={snap} tools={h.tools}>
             <div className="mt-2">
-              {h.sections.map((s, i) => <SectionView key={`${i}-${s.kind}`} s={s} positions={snap.positions} tokens={snap.tokens} tools={h.tools} onOpen={setDetail} />)}
+              {!empty && h.sections.map((s, i) => <SectionView key={`${i}-${s.kind}`} s={s} positions={snap.positions} tokens={snap.tokens} tools={h.tools} onOpen={setDetail} />)}
             </div>
             {detailPos && (
               <Sheet onClose={() => setDetail(null)}>
@@ -129,6 +159,7 @@ function Body({ h, header, compact, watch, address }: { h: ReturnType<typeof use
       </div>
 
       {receive && <Sheet onClose={() => setReceive(false)}><Receive address={address} /></Sheet>}
+      {fund && <Sheet onClose={() => setFund(false)}><div className="pb-4"><Funding address={address} apiBase={apiBase} compact /></div></Sheet>}
     </div>
   );
 }

@@ -14,7 +14,10 @@ export async function makeCtx(owner: string): Promise<Ctx> {
 /** Everything about a wallet: balances, every adapter's positions, recent activity. */
 export type Progress = (e: { name: string; positions: number; ms: number; error?: string }) => void;
 
-export async function snapshot(owner: string, onProgress?: Progress): Promise<Snapshot> {
+export async function snapshot(owner: string, report?: Progress): Promise<Snapshot> {
+  // Progress goes to whoever started the read; it must never be able to break the read itself
+  // (the snapshot is cached and shared with other requests).
+  const onProgress: Progress = (e) => { try { report?.(e); } catch { /* listener went away */ } };
   const [ctx, act] = await Promise.all([makeCtx(owner), activity(owner).catch(() => ({ txCount: 0, bySource: {}, byType: {} }))]);
   const errors: Snapshot["errors"] = [];
   onProgress?.({ name: "Wallet", positions: ctx.tokens.length, ms: 0 });

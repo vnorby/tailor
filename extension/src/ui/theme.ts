@@ -28,6 +28,8 @@ export function applyTheme(t: Theme | null | undefined, el: HTMLElement = docume
   el.dataset.texture = t.texture;
   el.dataset.density = t.density;
   el.dataset.mode = t.mode;
+  // A synchronous copy so the next page load paints in the theme from its first frame.
+  try { if (el === document.documentElement) localStorage.setItem("tailor-theme", JSON.stringify(t)); } catch { /* storage unavailable */ }
 }
 
 export async function loadTheme(): Promise<Theme | null> {
@@ -39,6 +41,7 @@ export async function saveTheme(t: Theme) { await chrome.storage.local.set({ the
 
 /** Apply the saved theme now and whenever it changes. */
 export function watchTheme() {
+  try { const cached = localStorage.getItem("tailor-theme"); if (cached) applyTheme(JSON.parse(cached) as Theme); } catch { /* no cached theme */ }
   void loadTheme().then((t) => applyTheme(t));
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.theme) applyTheme(changes.theme.newValue as Theme);

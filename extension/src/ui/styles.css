@@ -50,7 +50,9 @@
   color-scheme: dark;
 }
 
-html, body { transition: background-color .5s ease, color .5s ease; }
+html, /* No color transition on body: inherited colors would animate (and stick mid-way in throttled pages). */
+body { color: var(--color-chalk); background-color: var(--color-cloth); }
+button { color: inherit; }
 html[data-texture="weave"] body { background-image: repeating-linear-gradient(45deg, color-mix(in oklab, var(--t-text) 2%, transparent) 0 2px, transparent 2px 4px), repeating-linear-gradient(-45deg, color-mix(in oklab, #000 6%, transparent) 0 2px, transparent 2px 4px); }
 html[data-texture="grid"] body { background-image: linear-gradient(color-mix(in oklab, var(--t-text) 5%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklab, var(--t-text) 5%, transparent) 1px, transparent 1px); background-size: 24px 24px; }
 html[data-texture="dots"] body { background-image: radial-gradient(color-mix(in oklab, var(--t-text) 9%, transparent) 1px, transparent 1px); background-size: 14px 14px; }

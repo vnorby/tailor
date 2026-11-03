@@ -25,7 +25,9 @@ export async function POST(req: Request) {
 
   const body = new ReadableStream({
     async start(c) {
-      const send = (o: unknown) => c.enqueue(enc.encode(JSON.stringify(o) + "\n"));
+      let closed = false;
+      // The client may disconnect mid-stream; keep working (results are cached) but stop writing.
+      const send = (o: unknown) => { if (closed) return; try { c.enqueue(enc.encode(JSON.stringify(o) + "\n")); } catch { closed = true; } };
       try {
         send({ type: "status", source: "chain", text: "Reading the chain" });
         // Only protocols where something was found (or failed) are worth a line.
@@ -47,7 +49,7 @@ export async function POST(req: Request) {
           }
         }
       } catch (e) { send({ type: "error", error: e instanceof Error ? e.message : String(e) }); }
-      c.close();
+      try { c.close(); } catch { /* already closed */ }
     },
   });
   return new Response(body, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });

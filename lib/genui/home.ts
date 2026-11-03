@@ -50,7 +50,7 @@ The fixed frame (always rendered, you don't output it): account, total balance, 
 ONLY JSON objects, one per line, no prose, no code fences, in this order:
 1. 2 to 4 {"status": "..."} lines: short notes to the user about what stands out in their wallet, shown while the home loads (max 60 chars, concrete, real numbers ok), e.g. "5x JitoSOL loop is 13% from liquidation".
 2. {"alert": {"text": "...", "tone": "danger"|"warn"|"info", "positionId"?: id}} — ONLY if something genuinely needs attention now (liquidation risk, claimable/expiring). Max 60 chars. Omit otherwise.
-3. {"actions": [3–5 refs]} — the buttons under the balance. Refs: "send", "receive", "swap", any tool id, or "pos:<positionId>:<actionId>" for a position action they'd use constantly. Pick for how this person uses a wallet.
+3. {"actions": [3–5 refs]} — the buttons under the balance. Refs: "send", "receive", "swap", "fund" (add funds: buy/deposit/bridge — include it first when the wallet holds under ~$20 or has almost no SOL for fees), any tool id, or "pos:<positionId>:<actionId>" for a position action they'd use constantly. Pick for how this person uses a wallet.
 4. One {"section": ...} per section, top to bottom:
    - {"kind":"positions","title":"1–2 words","positionIds":[...]}  compact rows (protocol, name, value, risk). Group naturally (e.g. "Loans", "Earning", "Perps", "Orders", "Staked").
    - {"kind":"tokens","title"?:…,"limit"?:n}  wallet tokens.
@@ -81,7 +81,7 @@ function describe(p: Position) {
   };
 }
 
-const BASE_ACTIONS = new Set(["send", "receive", "swap"]);
+const BASE_ACTIONS = new Set(["send", "receive", "swap", "fund"]);
 
 function sanitizeAction(ref: unknown, snap: Snapshot, tools: ToolDef[]): ActionRef | null {
   if (typeof ref !== "string") return null;
@@ -121,6 +121,12 @@ export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Pre
   const home: Home = { actions: ["send", "receive", "swap"], sections: [], details: {}, generatedAt: Date.now() };
   let instructions = prefs.instructions, reply = "";
 
+  // An empty wallet has one job: getting funded. The client shows funding options; no model call needed.
+  if (snap.netWorthUsd < 1 && !snap.positions.length && !request) {
+    yield { type: "status", text: "Empty wallet: let's fund it", source: "ai" };
+    yield { type: "done", home: { actions: ["fund", "receive"], sections: [], details: {}, generatedAt: Date.now() }, prefs, reply: "" };
+    return;
+  }
   if (!process.env.ANTHROPIC_API_KEY) { yield* fallback(snap, prefs, home); return; }
 
   const g = globalFacts(snap);

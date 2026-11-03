@@ -3,7 +3,7 @@ export const usd = (n: number | undefined, compact = false) => {
   const a = Math.abs(n);
   if (compact && a >= 1e6) return `${n < 0 ? "−" : ""}$${(a / 1e6).toFixed(2)}M`;
   if (compact && a >= 1e4) return `${n < 0 ? "−" : ""}$${(a / 1e3).toFixed(1)}k`;
-  const dp = a >= 1000 ? 0 : a >= 1 ? 2 : 4;
+  const dp = a >= 1000 ? 0 : a >= 0.01 || a === 0 ? 2 : 4;
   return `${n < 0 ? "−" : ""}$${a.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp })}`;
 };
 export const amt = (n: number, dp = 4) => n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 2 : dp });

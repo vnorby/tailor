@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     async start(c) {
       try { for await (const ev of generateTheme({ activities, style, current: b.current ?? null })) c.enqueue(enc.encode(JSON.stringify(ev) + "\n")); }
       catch (e) { c.enqueue(enc.encode(JSON.stringify({ type: "error", error: e instanceof Error ? e.message : String(e) }) + "\n")); }
-      c.close();
+      try { c.close(); } catch { /* already closed */ }
     },
   });
   return new Response(body, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
