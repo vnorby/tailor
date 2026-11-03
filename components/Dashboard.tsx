@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import type { Prefs, Snapshot, ToolDef } from "@/lib/core/types";
-import type { Card, Page } from "@/lib/genui/spec";
 import { GenCard, GenProvider } from "@/components/genui/Render";
-import { ActionProvider } from "@/components/ActionSheet";
+import { ActionProvider, type Executor } from "@/components/ActionSheet";
+import { usePage } from "@/components/genui/usePage";
 import { WalletPicker } from "@/components/WalletPicker";
 import { useWallet } from "@/lib/ui/useWallet";
 import { ago, short } from "@/lib/ui/format";
@@ -13,76 +12,21 @@ import { PROTOCOLS } from "@/lib/ui/protocols";
 
 const SUGGESTIONS = ["What should I do about my riskiest position?", "Hide anything under $20", "Show my yields side by side", "Draw my portfolio as something fun"];
 
-type Ev = { type: "headline"; headline: string } | { type: "card"; card: Card; index: number } | { type: "done"; page: Page; prefs: Prefs; reply: string } | { type: "error"; error: string };
-
 export function Dashboard({ owner }: { owner: string }) {
-  const [snap, setSnap] = useState<Snapshot | null>(null);
-  const [tools, setTools] = useState<ToolDef[]>([]);
-  const [headline, setHeadline] = useState<string | null>(null);
-  const [cards, setCards] = useState<Card[]>([]);
-  const [prefs, setPrefs] = useState<Prefs>({ instructions: [] });
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
-  const [reply, setReply] = useState<string | null>(null);
+  const { snap, tools, headline, cards, prefs, error, loading, generating, reply, load, ask } = usePage("", owner);
   const [prompt, setPrompt] = useState("");
-  const { account } = useWallet();
-  const abort = useRef<AbortController | null>(null);
-
-  /** Stream a page: cards appear one by one as Claude writes them. */
-  const generate = useCallback(async (text?: string, reset = false) => {
-    abort.current?.abort();
-    const ac = new AbortController(); abort.current = ac;
-    setGenerating(true); setReply(null);
-    const fresh: Card[] = [];
-    let first = true;
-    try {
-      const r = await fetch("/api/page", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner, prompt: text, reset }), signal: ac.signal });
-      if (!r.ok || !r.body) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
-      const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-          if (!line.trim()) continue;
-          const ev = JSON.parse(line) as Ev;
-          if (ev.type === "headline") setHeadline(ev.headline);
-          if (ev.type === "card") {
-            if (first) { first = false; }
-            if (ev.index < 0) fresh.unshift(ev.card); else fresh.push(ev.card);
-            setCards([...fresh]);
-          }
-          if (ev.type === "done") { setCards(ev.page.cards); setHeadline(ev.page.headline); setPrefs(ev.prefs); if (ev.reply) setReply(ev.reply); setPrompt(""); }
-          if (ev.type === "error") throw new Error(ev.error);
-        }
-      }
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") setReply(e instanceof Error ? e.message : String(e));
-    } finally { if (abort.current === ac) setGenerating(false); }
-  }, [owner]);
-
-  const load = useCallback(async (fresh = false) => {
-    setLoading(true); setError(null);
-    try {
-      const r = await fetch(`/api/wallet?owner=${owner}${fresh ? "&fresh=1" : ""}`);
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error ?? `Failed (${r.status})`);
-      setSnap(j.snapshot); setTools(j.tools); setPrefs(j.prefs);
-      if (j.page) { setCards(j.page.cards); setHeadline(j.page.headline); }
-      else { setCards([]); void generate(); }
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setLoading(false); }
-  }, [owner, generate]);
-
-  useEffect(() => { void load(); }, [load]);
+  const { account, sign } = useWallet();
+  const generate = async (text?: string, reset = false) => { await ask(text, reset); setPrompt(""); };
+  const executor: Executor = {
+    apiBase: "", owner, canSign: account?.address === owner,
+    signHint: <><p className="text-[13px] text-dim">{account ? `Connected wallet ${short(account.address)} isn't ${short(owner)}. Switch accounts in your wallet to sign.` : `Connect ${short(owner)} to sign.`}</p><WalletPicker /></>,
+    sign: async (txs) => { const out: string[] = []; for (const t of txs) out.push(await sign(t)); return out; },
+  };
 
   const viewOnly = account?.address !== owner;
 
   return (
-    <ActionProvider owner={owner} onDone={() => load(true)}>
+    <ActionProvider executor={executor} onDone={() => load(true)}>
       <div className="mx-auto w-full max-w-[1200px] px-4 sm:px-6 pb-44">
         <nav className="flex items-center justify-between py-4">
           <Link href="/" className="font-serif text-[26px] leading-none">Tailor</Link>

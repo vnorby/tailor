@@ -8,10 +8,11 @@ import { titanAdapter } from "./titan";
 import { dflowAdapter } from "./dflow";
 import { stakeAdapter } from "./stake";
 import { swapAdapter } from "./swap";
+import { walletAdapter } from "./wallet";
 
 export const ADAPTERS: Adapter[] = [
   kaminoAdapter, jupiterAdapter, driftAdapter, marginfiAdapter, phoenixAdapter,
-  titanAdapter, dflowAdapter, stakeAdapter, swapAdapter,
+  titanAdapter, dflowAdapter, stakeAdapter, swapAdapter, walletAdapter,
 ];
 
 export const adapterFor = (p: Protocol) => ADAPTERS.find((a) => a.protocol === p);

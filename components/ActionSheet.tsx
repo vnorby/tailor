@@ -2,15 +2,26 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Action, ActionField, Position, ToolDef } from "@/lib/core/types";
-import { useWallet } from "@/lib/ui/useWallet";
 import { short } from "@/lib/ui/format";
-import { WalletPicker } from "./WalletPicker";
+import { BalanceChanges, type Preview } from "./BalanceChanges";
+
+/**
+ * How the host signs and where the API lives. The website signs through a connected
+ * Wallet Standard wallet; the extension signs inside its own background worker.
+ */
+export interface Executor {
+  apiBase: string;                  // "" = same origin
+  owner: string;
+  canSign: boolean;
+  signHint?: ReactNode;             // shown instead of the sign button when canSign is false
+  sign(txs: string[]): Promise<string[]>;
+}
 
 type Target =
   | { kind: "action"; position: Position; action: Action; params?: Record<string, string> }
   | { kind: "tool"; tool: ToolDef; params: Record<string, string> };
 
-interface Prepared { txs: string[]; summary: string; warnings?: string[]; simulations: { ok: boolean; error?: string }[] }
+interface Prepared { txs: string[]; summary: string; warnings?: string[]; simulations: { ok: boolean; error?: string }[]; preview?: Preview | null }
 
 type Stage =
   | { s: "form" }
@@ -27,13 +38,13 @@ export const useActions = () => {
   return c;
 };
 
-export function ActionProvider({ owner, onDone, children }: { owner: string; onDone(): void; children: ReactNode }) {
+export function ActionProvider({ executor, onDone, children }: { executor: Executor; onDone(): void; children: ReactNode }) {
   const [target, setTarget] = useState<Target | null>(null);
   const open = useCallback((t: Target) => setTarget(t), []);
   return (
     <Ctx.Provider value={{ open }}>
       {children}
-      {target && <Sheet key={JSON.stringify(target.kind === "action" ? [target.position.id, target.action.id] : target.tool.id)} owner={owner} target={target} onClose={(changed) => { setTarget(null); if (changed) onDone(); }} />}
+      {target && <Sheet key={JSON.stringify(target.kind === "action" ? [target.position.id, target.action.id] : target.tool.id)} ex={executor} target={target} onClose={(changed) => { setTarget(null); if (changed) onDone(); }} />}
     </Ctx.Provider>
   );
 }
@@ -42,8 +53,8 @@ function fieldsOf(t: Target): ActionField[] {
   return t.kind === "action" ? t.action.fields ?? [] : t.tool.fields;
 }
 
-function Sheet({ owner, target, onClose }: { owner: string; target: Target; onClose(changed: boolean): void }) {
-  const { account, sign } = useWallet();
+function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(changed: boolean): void }) {
+  const owner = ex.owner;
   const fields = fieldsOf(target);
   const [params, setParams] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
@@ -53,14 +64,13 @@ function Sheet({ owner, target, onClose }: { owner: string; target: Target; onCl
   // Tools and what-if sliders arrive with their inputs already chosen, so build straight away.
   const direct = !fields.length || target.kind === "tool" || (!!target.params && fields.every((f) => target.params?.[f.name] != null || f.default != null));
   const [stage, setStage] = useState<Stage>({ s: direct ? "preparing" : "form" });
-  const ownerMatches = account?.address === owner;
   const label = target.kind === "action" ? target.action.label : target.tool.label;
   const danger = target.kind === "action" && target.action.danger;
 
   const prepare = useCallback(async () => {
     setStage({ s: "preparing" });
     try {
-      const r = await fetch(target.kind === "action" ? "/api/action" : "/api/tool", {
+      const r = await fetch(`${ex.apiBase}${target.kind === "action" ? "/api/action" : "/api/tool"}`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify(target.kind === "action"
           ? { owner, positionId: target.position.id, actionId: target.action.id, params }
@@ -68,9 +78,14 @@ function Sheet({ owner, target, onClose }: { owner: string; target: Target; onCl
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? `Request failed (${r.status})`);
-      setStage({ s: "review", prep: j as Prepared });
+      const prep = j as Prepared;
+      setStage({ s: "review", prep });
+      // Exact balance changes for the first tx; later txs depend on it landing.
+      fetch(`${ex.apiBase}/api/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx: prep.txs[0], owner }) })
+        .then((x) => (x.ok ? x.json() : null)).catch(() => null)
+        .then((preview) => setStage((st) => (st.s === "review" && st.prep === prep ? { s: "review", prep: { ...prep, preview } } : st)));
     } catch (e) { setStage({ s: "error", message: e instanceof Error ? e.message : String(e) }); }
-  }, [owner, params, target]);
+  }, [ex.apiBase, owner, params, target]);
 
   // Actions without inputs go straight to preparing.
   useEffect(() => {
@@ -81,10 +96,12 @@ function Sheet({ owner, target, onClose }: { owner: string; target: Target; onCl
   async function signAll(prep: Prepared) {
     const sigs: string[] = [];
     try {
-      for (let i = 0; i < prep.txs.length; i++) {
+      setStage({ s: "signing", prep, i: 0, sigs: [] });
+      const signedAll = await ex.sign(prep.txs);
+      for (let i = 0; i < signedAll.length; i++) {
         setStage({ s: "signing", prep, i, sigs: [...sigs] });
-        const signed = await sign(prep.txs[i]);
-        const r = await fetch("/api/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner, tx: signed }) });
+        const signed = signedAll[i];
+        const r = await fetch(`${ex.apiBase}/api/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner, tx: signed }) });
         const j = await r.json();
         if (j.signature) sigs.push(j.signature);
         if (!r.ok || !j.ok) throw new Error(j.error ?? "Transaction failed.");
@@ -122,6 +139,7 @@ function Sheet({ owner, target, onClose }: { owner: string; target: Target; onCl
         {(stage.s === "review" || stage.s === "signing") && (
           <div className="flex flex-col gap-3">
             <p className="text-[15px] leading-snug">{stage.prep.summary}</p>
+            {stage.prep.preview && <BalanceChanges preview={stage.prep.preview} />}
             {stage.prep.warnings?.map((w) => <p key={w} className="text-[13px] text-warn">{w}</p>)}
             <ul className="flex flex-col gap-1 text-[12.5px]">
               {stage.prep.simulations.map((sim, i) => (
@@ -130,14 +148,11 @@ function Sheet({ owner, target, onClose }: { owner: string; target: Target; onCl
                 </li>
               ))}
             </ul>
-            {!ownerMatches ? (
-              <div className="flex flex-col gap-2 mt-1">
-                <p className="text-[13px] text-dim">{account ? `Connected wallet ${short(account.address)} isn't ${short(owner)}. Switch accounts in your wallet to sign.` : `Connect ${short(owner)} to sign.`}</p>
-                <WalletPicker />
-              </div>
+            {!ex.canSign ? (
+              <div className="flex flex-col gap-2 mt-1">{ex.signHint ?? <p className="text-[13px] text-dim">This account can&apos;t sign.</p>}</div>
             ) : (
               <button className={`btn ${danger ? "btn-danger" : "btn-primary"} justify-center`} disabled={stage.s === "signing" || !stage.prep.simulations[0]?.ok} onClick={() => stage.s === "review" && signAll(stage.prep)}>
-                {stage.s === "signing" ? `Waiting for wallet${stage.prep.txs.length > 1 ? ` (${stage.i + 1}/${stage.prep.txs.length})` : ""}…` : stage.prep.txs.length > 1 ? `Sign ${stage.prep.txs.length} transactions` : "Sign & send"}
+                {stage.s === "signing" ? `Signing & sending${stage.prep.txs.length > 1 ? ` (${stage.i + 1}/${stage.prep.txs.length})` : ""}…` : stage.prep.txs.length > 1 ? `Sign ${stage.prep.txs.length} transactions` : "Sign & send"}
               </button>
             )}
           </div>
