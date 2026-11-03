@@ -7,6 +7,7 @@
  * model is still writing the rest.
  */
 import Anthropic from "@anthropic-ai/sdk";
+import { jsonObjects } from "./jsonstream";
 import type { Position, Prefs, Snapshot, ToolDef } from "@/lib/core/types";
 import { usd } from "@/lib/core/solana";
 import { globalFacts, positionFacts } from "./facts";
@@ -99,9 +100,11 @@ export async function* generatePage(snap: Snapshot, tools: ToolDef[], prefs: Pre
   };
 
   const client = new Anthropic();
-  const stream = client.messages.stream({
+  const stream = client.beta.messages.stream({
     model: MODEL,
     max_tokens: 32000,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
     output_config: { effort: "low" },
     system: SYSTEM,
     messages: [{
@@ -114,13 +117,10 @@ export async function* generatePage(snap: Snapshot, tools: ToolDef[], prefs: Pre
     }],
   });
 
-  let buf = "", headline = "", reply = "", instructions = prefs.instructions, index = 0;
+  let headline = "", reply = "", instructions = prefs.instructions, index = 0;
   const cards: Card[] = [];
-  const handle = (line: string): PageEvent | null => {
-    const s = line.trim().replace(/^```(json)?|```$/g, "").trim();
-    if (!s.startsWith("{")) return null;
-    let obj: Record<string, unknown>;
-    try { obj = JSON.parse(s); } catch { return null; }
+  const parser = jsonObjects();
+  const handle = (obj: Record<string, unknown>): PageEvent | null => {
     if (typeof obj.headline === "string") { headline = obj.headline.slice(0, 300); return { type: "headline", headline }; }
     if (obj.card) { const c = sanitizeCard(obj.card, ctx); if (c) { cards.push(c); return { type: "card", card: c, index: index++ }; } return null; }
     if (obj.done && typeof obj.done === "object") {
@@ -134,14 +134,8 @@ export async function* generatePage(snap: Snapshot, tools: ToolDef[], prefs: Pre
   try {
     for await (const ev of stream) {
       if (ev.type !== "content_block_delta" || ev.delta.type !== "text_delta") continue;
-      buf += ev.delta.text;
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const out = handle(buf.slice(0, nl)); buf = buf.slice(nl + 1);
-        if (out) yield out;
-      }
+      for (const o of parser.push(ev.delta.text)) { const out = handle(o as Record<string, unknown>); if (out) yield out; }
     }
-    const tail = handle(buf); if (tail) yield tail;
     const final = await stream.finalMessage();
     if (final.stop_reason === "refusal") throw new Error("refused");
   } catch (e) {

@@ -12,12 +12,16 @@ export async function makeCtx(owner: string): Promise<Ctx> {
 }
 
 /** Everything about a wallet: balances, every adapter's positions, recent activity. */
-export async function snapshot(owner: string): Promise<Snapshot> {
+export type Progress = (e: { name: string; positions: number; ms: number; error?: string }) => void;
+
+export async function snapshot(owner: string, onProgress?: Progress): Promise<Snapshot> {
   const [ctx, act] = await Promise.all([makeCtx(owner), activity(owner).catch(() => ({ txCount: 0, bySource: {}, byType: {} }))]);
   const errors: Snapshot["errors"] = [];
+  onProgress?.({ name: "Wallet", positions: ctx.tokens.length, ms: 0 });
   const results = await Promise.all(ADAPTERS.map(async (a) => {
-    try { return await withTimeout(a.positions(owner, ctx), ADAPTER_TIMEOUT, a.name); }
-    catch (e) { errors.push({ protocol: a.protocol, message: e instanceof Error ? e.message : String(e) }); return [] as Position[]; }
+    const t0 = Date.now();
+    try { const ps = await withTimeout(a.positions(owner, ctx), ADAPTER_TIMEOUT, a.name); onProgress?.({ name: a.name, positions: ps.length, ms: Date.now() - t0 }); return ps; }
+    catch (e) { const message = e instanceof Error ? e.message : String(e); errors.push({ protocol: a.protocol, message }); onProgress?.({ name: a.name, positions: 0, ms: Date.now() - t0, error: message }); return [] as Position[]; }
   }));
   const positions = results.flat();
   // Tokens that are themselves positions (LSTs, JLP, vault shares) are shown on their card, not double-counted.

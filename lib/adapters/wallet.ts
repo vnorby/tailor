@@ -73,7 +73,7 @@ async function closeEmpty(owner: string) {
 
 export const walletAdapter: Adapter = {
   protocol: "wallet",
-  name: "Wallet",
+  name: "Wallet tools",
   async positions() { return []; },
   tools: [
     {
