@@ -3,29 +3,58 @@
 @import "@fontsource/instrument-serif/400-italic.css";
 @import "@fontsource-variable/inter-tight";
 @import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource-variable/dm-sans";
+@import "@fontsource-variable/manrope";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource-variable/sora";
+@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/syne";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/space-mono/400.css";
+@import "@fontsource/space-mono/700.css";
 
 @source "../";
 @source "../../../components";
 @source "../../../lib";
 
-@theme {
-  --color-cloth: #141416;
-  --color-panel: #1c1c1f;
-  --color-panel-2: #232327;
-  --color-line: #2e2e33;
-  --color-chalk: #ece6d8;
-  --color-dim: #9a958a;
-  --color-faint: #5f5c56;
-  --color-tape: #e8c547;
-  --color-danger: #ff5a4e;
-  --color-warn: #f0a33a;
-  --color-pos: #7fd18b;
-  --font-serif: "Instrument Serif", Georgia, serif;
-  --font-sans: "Inter Tight Variable", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+/* Every token reads a runtime variable, so a generated theme restyles everything at once. */
+@theme inline {
+  --color-cloth: var(--t-bg);
+  --color-panel: var(--t-surface);
+  --color-panel-2: var(--t-surface2);
+  --color-line: var(--t-line);
+  --color-chalk: var(--t-text);
+  --color-dim: var(--t-dim);
+  --color-faint: var(--t-faint);
+  --color-tape: var(--t-accent);
+  --color-on-tape: var(--t-on-accent);
+  --color-danger: var(--t-neg);
+  --color-warn: var(--t-warn);
+  --color-pos: var(--t-pos);
+  --font-serif: var(--t-font-display);
+  --font-sans: var(--t-font-sans);
+  --font-mono: var(--t-font-mono);
 }
 
-html, body { background: var(--color-cloth); color: var(--color-chalk); font-family: var(--font-sans); margin: 0; }
+:root {
+  --t-bg: #141416; --t-surface: #1c1c1f; --t-surface2: #232327; --t-line: #2e2e33;
+  --t-text: #ece6d8; --t-dim: #9a958a; --t-faint: #5f5c56; --t-accent: #e8c547; --t-on-accent: #1a1708;
+  --t-pos: #7fd18b; --t-neg: #ff5a4e; --t-warn: #f0a33a; --t-radius: 14px;
+  --t-font-sans: "Inter Tight Variable", system-ui, sans-serif;
+  --t-font-display: "Instrument Serif", Georgia, serif;
+  --t-font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+html, body { transition: background-color .5s ease, color .5s ease; }
+html[data-texture="weave"] body { background-image: repeating-linear-gradient(45deg, color-mix(in oklab, var(--t-text) 2%, transparent) 0 2px, transparent 2px 4px), repeating-linear-gradient(-45deg, color-mix(in oklab, #000 6%, transparent) 0 2px, transparent 2px 4px); }
+html[data-texture="grid"] body { background-image: linear-gradient(color-mix(in oklab, var(--t-text) 5%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklab, var(--t-text) 5%, transparent) 1px, transparent 1px); background-size: 24px 24px; }
+html[data-texture="dots"] body { background-image: radial-gradient(color-mix(in oklab, var(--t-text) 9%, transparent) 1px, transparent 1px); background-size: 14px 14px; }
+html[data-texture="grain"] body { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 .08 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
 body {
   background-image:
     repeating-linear-gradient(45deg, rgba(255,255,255,0.012) 0 2px, transparent 2px 4px),
@@ -39,19 +68,25 @@ body {
     repeating-linear-gradient(90deg, var(--color-tape) 0 1px, transparent 1px 50px) bottom / 100% 10px no-repeat;
   opacity: 0.75;
 }
-.card { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: 14px; }
+.card { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: var(--t-radius); transition: background-color .5s ease, border-color .5s ease, border-radius .5s ease; }
 .card[data-accent="danger"] { border-color: color-mix(in oklab, var(--color-danger) 60%, var(--color-line)); box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-danger) 25%, transparent), 0 12px 40px -18px var(--color-danger); }
 .card[data-accent="warn"] { border-color: color-mix(in oklab, var(--color-warn) 50%, var(--color-line)); }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 9px; font-size: 13px; font-weight: 500; background: var(--color-panel-2); border: 1px solid var(--color-line); color: var(--color-chalk); transition: background .15s, border-color .15s; cursor: pointer; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: calc(var(--t-radius) * .65); font-size: 13px; font-weight: 500; background: var(--color-panel-2); border: 1px solid var(--color-line); color: var(--color-chalk); transition: background .15s, border-color .15s; cursor: pointer; }
 .btn:hover:not(:disabled) { background: #2b2b30; border-color: #3c3c43; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn-primary { background: var(--color-tape); color: #1a1708; border-color: transparent; }
-.btn-primary:hover:not(:disabled) { background: #f2d264; border-color: transparent; }
+.btn-primary { background: var(--color-tape); color: var(--color-on-tape); border-color: transparent; }
+.btn-primary:hover:not(:disabled) { background: color-mix(in oklab, var(--color-tape) 88%, white); border-color: transparent; }
 .btn-danger { color: var(--color-danger); border-color: color-mix(in oklab, var(--color-danger) 35%, var(--color-line)); }
 .btn-danger:hover:not(:disabled) { background: color-mix(in oklab, var(--color-danger) 14%, var(--color-panel-2)); }
-.input { width: 100%; background: var(--color-cloth); border: 1px solid var(--color-line); border-radius: 9px; padding: 9px 11px; color: var(--color-chalk); font-size: 14px; outline: none; box-sizing: border-box; }
+.input { width: 100%; background: var(--color-cloth); border: 1px solid var(--color-line); border-radius: calc(var(--t-radius) * .65); padding: 9px 11px; color: var(--color-chalk); font-size: 14px; outline: none; box-sizing: border-box; }
 .input:focus { border-color: var(--color-tape); }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .rise { animation: rise .35s ease-out both; }
 @media (prefers-reduced-motion: reduce) { .rise { animation: none; } }
 .no-scrollbar::-webkit-scrollbar { display: none } .no-scrollbar { scrollbar-width: none }
+
+html[data-density="compact"] .card { padding: 12px !important; }
+html[data-mode="light"] { color-scheme: light; }
+@keyframes caret { 50% { opacity: 0; } }
+.caret::after { content: ""; display: inline-block; width: .5em; height: 1em; margin-left: 2px; vertical-align: -2px; background: var(--color-tape); animation: caret 1s steps(1) infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }

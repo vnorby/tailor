@@ -9,7 +9,7 @@ import type { Position, Prefs, Snapshot, ToolDef } from "@/lib/core/types";
 import { usd } from "@/lib/core/solana";
 import { positionFacts, globalFacts } from "./facts";
 import { jsonObjects } from "./jsonstream";
-import { defaultCard } from "./generate";
+import { defaultCard } from "./cards";
 import { sanitizeCard, type Card } from "./spec";
 
 export interface Profile { activities: string[]; style?: string }

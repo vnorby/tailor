@@ -3,8 +3,10 @@ import { createRoot } from "react-dom/client";
 import { call, type AccountMeta, type WalletState } from "~/shared/messages";
 import type { Executor } from "@/components/ActionSheet";
 import "./styles.css";
+import { watchTheme } from "./theme";
 
 export function mount(node: ReactNode) {
+  watchTheme();
   createRoot(document.getElementById("root")!).render(node);
 }
 
@@ -68,7 +70,7 @@ export function AccountSwitcher({ state, active, onChanged }: { state: WalletSta
   return (
     <div className="relative">
       <button className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-panel-2" onClick={() => setOpen((o) => !o)}>
-        <span className="size-6 rounded-full bg-tape/90 text-[#1a1708] text-[12px] font-semibold flex items-center justify-center">{active?.name.slice(0, 1) ?? "?"}</span>
+        <span className="size-6 rounded-full bg-tape text-on-tape text-[12px] font-semibold flex items-center justify-center">{active?.name.slice(0, 1) ?? "?"}</span>
         <span className="text-left leading-tight">
           <span className="block text-[13px] font-medium">{active?.name ?? "No account"}{active?.kind === "watch" && <span className="ml-1 text-[10px] text-faint">watch</span>}</span>
           {active && <span className="block num text-[11px] text-dim">{short(active.address)}</span>}
