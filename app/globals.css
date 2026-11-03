@@ -1,26 +1,71 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@theme {
+  --color-cloth: #141416;      /* charcoal wool */
+  --color-panel: #1c1c1f;
+  --color-panel-2: #232327;
+  --color-line: #2e2e33;
+  --color-chalk: #ece6d8;      /* tailor's chalk */
+  --color-dim: #9a958a;
+  --color-faint: #5f5c56;
+  --color-tape: #e8c547;       /* measuring tape */
+  --color-danger: #ff5a4e;
+  --color-warn: #f0a33a;
+  --color-pos: #7fd18b;
+  --font-serif: var(--font-serif), Georgia, serif;
+  --font-sans: var(--font-sans), system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-cloth);
+  color: var(--color-chalk);
+  font-family: var(--font-sans);
+  /* faint woven texture */
+  background-image:
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.012) 0 2px, transparent 2px 4px),
+    repeating-linear-gradient(-45deg, rgba(0,0,0,0.05) 0 2px, transparent 2px 4px);
 }
+
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* the measuring-tape rule: the one signature element */
+.tape {
+  height: 14px;
+  background:
+    repeating-linear-gradient(90deg, var(--color-tape) 0 1px, transparent 1px 10px) bottom / 100% 5px no-repeat,
+    repeating-linear-gradient(90deg, var(--color-tape) 0 1px, transparent 1px 50px) bottom / 100% 10px no-repeat;
+  opacity: 0.75;
+}
+
+.card {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: 14px;
+}
+.card[data-accent="danger"] { border-color: color-mix(in oklab, var(--color-danger) 60%, var(--color-line)); box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-danger) 25%, transparent), 0 12px 40px -18px var(--color-danger); }
+.card[data-accent="warn"] { border-color: color-mix(in oklab, var(--color-warn) 50%, var(--color-line)); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; border-radius: 9px; font-size: 13px; font-weight: 500;
+  background: var(--color-panel-2); border: 1px solid var(--color-line); color: var(--color-chalk);
+  transition: background .15s, border-color .15s;
+}
+.btn:hover:not(:disabled) { background: #2b2b30; border-color: #3c3c43; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--color-tape); color: #1a1708; border-color: transparent; }
+.btn-primary:hover:not(:disabled) { background: #f2d264; border-color: transparent; }
+.btn-danger { color: var(--color-danger); border-color: color-mix(in oklab, var(--color-danger) 35%, var(--color-line)); }
+.btn-danger:hover:not(:disabled) { background: color-mix(in oklab, var(--color-danger) 14%, var(--color-panel-2)); }
+
+.input {
+  width: 100%; background: var(--color-cloth); border: 1px solid var(--color-line); border-radius: 9px;
+  padding: 9px 11px; color: var(--color-chalk); font-size: 14px; outline: none;
+}
+.input:focus { border-color: var(--color-tape); }
+
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .35s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .rise { animation: none; } }
+.no-scrollbar::-webkit-scrollbar{display:none}.no-scrollbar{scrollbar-width:none}
