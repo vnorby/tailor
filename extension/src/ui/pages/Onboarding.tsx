@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { call } from "~/shared/messages";
 import { isValidMnemonic, newMnemonic } from "~/vault/derive";
 import { Logo, mount } from "../common";
 
-type Step = "welcome" | "password" | "phrase" | "verify" | "import" | "done";
+type Step = "welcome" | "password" | "phrase" | "import" | "done";
 
 function Onboarding() {
   const [step, setStep] = useState<Step>("welcome");
@@ -15,9 +15,6 @@ function Onboarding() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const words = mnemonic.split(" ");
-  // Ask for three random words to confirm the phrase was written down.
-  const quiz = useMemo(() => [...words.keys()].sort(() => Math.random() - 0.5).slice(0, 3).sort((a, b) => a - b), [words]);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
 
   const pwOk = pw.length >= 8 && pw === pw2;
 
@@ -86,23 +83,9 @@ function Onboarding() {
               {!revealed && <button className="absolute inset-0 m-auto h-10 w-44 btn justify-center" onClick={() => setRevealed(true)}>Reveal phrase</button>}
             </div>
             <button className="btn justify-center" disabled={!revealed} onClick={() => navigator.clipboard.writeText(mnemonic)}>Copy to clipboard</button>
-            <button className="btn btn-primary justify-center" disabled={!revealed} onClick={() => setStep("verify")}>I&apos;ve saved it</button>
-          </>
-        )}
-
-        {step === "verify" && (
-          <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); void finish(); }}>
-            <h2 className="font-serif text-[30px]">Check your phrase</h2>
-            <p className="text-dim text-[14px]">Enter these words from your recovery phrase.</p>
-            {quiz.map((i) => (
-              <label key={i} className="flex items-center gap-3 text-[14px]"><span className="w-16 text-dim">Word {i + 1}</span>
-                <input className="input num" autoCapitalize="off" spellCheck={false} value={answers[i] ?? ""} onChange={(e) => setAnswers((a) => ({ ...a, [i]: e.target.value.trim().toLowerCase() }))} />
-              </label>
-            ))}
             {err && <p className="text-[13px] text-danger">{err}</p>}
-            <button className="btn btn-primary justify-center" disabled={busy || !quiz.every((i) => answers[i] === words[i])}>{busy ? "Creating…" : "Create wallet"}</button>
-            <button type="button" className="text-[13px] text-dim hover:text-chalk" onClick={() => setStep("phrase")}>Show phrase again</button>
-          </form>
+            <button className="btn btn-primary justify-center" disabled={!revealed || busy} onClick={() => void finish()}>{busy ? "Creating…" : "I’ve saved it"}</button>
+          </>
         )}
 
         {step === "done" && (
