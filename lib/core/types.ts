@@ -141,36 +141,6 @@ export interface Snapshot {
   fetchedAt: number;
 }
 
-// ---------- layout ----------
-
-export type WidgetType =
-  | "alert"      // urgent banner tied to positions at risk
-  | "summary"    // net worth, allocation
-  | "position"   // one position, rendered by its protocol/kind-specific card
-  | "group"      // several positions in a compact list
-  | "tokens"     // wallet balances
-  | "tool"       // a ToolDef form (swap, stake…)
-  | "activity"   // what you've been doing
-  | "note";      // short text from the composer
-
-export interface Widget {
-  id: string;
-  type: WidgetType;
-  size: "s" | "m" | "l" | "xl";        // grid span: 1, 2, 3, 4 of 4 columns
-  title?: string;
-  note?: string;                        // one line of context written by the composer
-  positionIds?: string[];
-  toolId?: string;
-  toolDefaults?: Record<string, string>;
-  accent?: "danger" | "warn" | "calm";
-}
-
-export interface Layout {
-  headline: string;      // one sentence, top of page
-  widgets: Widget[];
-  generatedAt: number;
-}
-
 export interface Prefs {
   instructions: string[];  // standing user instructions applied to every layout
 }

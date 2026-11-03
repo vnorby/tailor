@@ -50,8 +50,8 @@ function Sheet({ owner, target, onClose }: { owner: string; target: Target; onCl
     for (const f of fields) init[f.name] = target.params?.[f.name] ?? f.default ?? "";
     return init;
   });
-  // Tool widgets collect their inputs inline, so they arrive ready to build.
-  const direct = !fields.length || target.kind === "tool";
+  // Tools and what-if sliders arrive with their inputs already chosen, so build straight away.
+  const direct = !fields.length || target.kind === "tool" || (!!target.params && fields.every((f) => target.params?.[f.name] != null || f.default != null));
   const [stage, setStage] = useState<Stage>({ s: direct ? "preparing" : "form" });
   const ownerMatches = account?.address === owner;
   const label = target.kind === "action" ? target.action.label : target.tool.label;

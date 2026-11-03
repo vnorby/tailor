@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
-import { getSnapshot } from "@/lib/core/cache";
-import { compose, fingerprint } from "@/lib/core/compose";
-import { isAddress } from "@/lib/core/solana";
-import { load, save } from "@/lib/core/store";
 import { allTools } from "@/lib/adapters";
+import { getSnapshot } from "@/lib/core/cache";
+import { isAddress } from "@/lib/core/solana";
+import { load } from "@/lib/core/store";
+import { fingerprint } from "@/lib/genui/generate";
 
-export const maxDuration = 120;
+export const maxDuration = 60;
 
-/** GET /api/wallet?owner=…&fresh=1 → snapshot + layout (re-composed when positions changed). */
+/**
+ * GET /api/wallet?owner=…&fresh=1 → snapshot + tools + the saved page if it still
+ * matches the wallet's positions (page: null means the client should stream a new one).
+ */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const owner = url.searchParams.get("owner") ?? "";
@@ -15,15 +18,9 @@ export async function GET(req: Request) {
   try {
     const snap = await getSnapshot(owner, url.searchParams.get("fresh") === "1");
     const saved = await load(owner);
-    const fp = fingerprint(snap);
-    let { layout, prefs } = saved;
-    let reply: string | undefined;
-    if (!layout || saved.fingerprint !== fp) {
-      ({ layout, prefs, reply } = await compose(snap, prefs, layout));
-      await save(owner, { layout, prefs, fingerprint: fp });
-    }
     const tools = allTools().map(({ adapter: _a, ...t }) => t);
-    return NextResponse.json({ snapshot: snap, layout, prefs, reply, tools });
+    const page = saved.layout && saved.fingerprint === fingerprint(snap) ? saved.layout : null;
+    return NextResponse.json({ snapshot: snap, tools, page, prefs: saved.prefs });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

@@ -1,11 +1,12 @@
 /**
- * Per-wallet layout + standing instructions. Neon Postgres when DATABASE_URL is
+ * Per-wallet generated page + standing instructions. Neon Postgres when DATABASE_URL is
  * set, otherwise an in-process map (fine for local dev, lost on restart).
  */
 import { neon } from "@neondatabase/serverless";
-import type { Layout, Prefs } from "./types";
+import type { Prefs } from "./types";
+import type { Page } from "@/lib/genui/spec";
 
-export interface Saved { layout: Layout | null; prefs: Prefs; fingerprint: string | null }
+export interface Saved { layout: Page | null; prefs: Prefs; fingerprint: string | null }
 
 const empty = (): Saved => ({ layout: null, prefs: { instructions: [] }, fingerprint: null });
 const mem = new Map<string, Saved>();
@@ -25,7 +26,7 @@ export async function load(owner: string): Promise<Saved> {
   const sql = db();
   if (!sql) return mem.get(owner) ?? empty();
   await ready;
-  const rows = (await sql`SELECT layout, prefs, fingerprint FROM wallet_layouts WHERE owner = ${owner}`) as { layout: Layout | null; prefs: Prefs; fingerprint: string | null }[];
+  const rows = (await sql`SELECT layout, prefs, fingerprint FROM wallet_layouts WHERE owner = ${owner}`) as { layout: Page | null; prefs: Prefs; fingerprint: string | null }[];
   return rows[0] ? { layout: rows[0].layout, prefs: rows[0].prefs ?? { instructions: [] }, fingerprint: rows[0].fingerprint } : empty();
 }
 
