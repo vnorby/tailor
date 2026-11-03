@@ -249,6 +249,7 @@ export async function buildLend(owner: string, position: Position, actionId: str
     const leg = raw.deposits.find((l) => l.reserve === (params.reserve || raw.deposits[0]?.reserve));
     if (!leg) throw new Error("Pick an asset to deposit.");
     if (!(Number(params.amount) > 0)) throw new Error("Enter an amount greater than zero.");
+    await ensureBalance(owner, leg.mint, leg.symbol, Number(params.amount));
     const action = await KaminoAction.buildDepositTxns({ ...common, amount: toBaseUnits(params.amount, leg.decimals), reserveAddress: addr(leg.reserve) });
     const tx = await compile(owner, KaminoAction.actionToIxs(action), [...action.luts, ...marketLut]);
     return { txs: [tx], summary: `Deposit ${params.amount} ${leg.symbol} into your Kamino position (${raw.marketName}).` };
@@ -260,35 +261,49 @@ export async function buildLend(owner: string, position: Position, actionId: str
     const live = ob.getBorrowByReserve(addr(debt.reserve));
     const repayUi = live ? live.amount.div(live.mintFactor) : new Decimal(debt.amount);
     const slippageBps = Number(params.slippageBps) > 0 ? Number(params.slippageBps) : 30;
-    const jup = jupiterSwapper(owner, { [coll.mint]: coll.decimals, [debt.mint]: debt.decimals }, slippageBps);
-    const res = await getRepayWithCollIxs({
-      kaminoMarket: market, debtReserveAddress: addr(debt.reserve), collReserveAddress: addr(coll.reserve), owner: own, obligation: ob,
-      referrer: none(), currentLedgerInstant: li, repayAmount: new Decimal(repayUi.toString()), isClosingPosition: true,
-      // Flash-loan ixs encode absolute ix indexes, so the compute budget must be part of the SDK's ix list.
-      budgetAndPriorityFeeIxs: [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: await priorityFee([raw.obligation, coll.reserve, debt.reserve]) }),
-      ].map(fromWeb3),
-      scopeRefreshIx: [], logger: () => {}, useV2Ixs: true, slippagePct: new Decimal(slippageBps / 100),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      quoter: jup.quoter as any, swapper: jup.swapper as any,
-    });
+    const fee = await priorityFee([raw.obligation, coll.reserve, debt.reserve]);
     let lastErr: unknown;
-    for (const r of res) {
+    // Jupiter routes vary in account count; shrink the route until the whole close fits in one tx.
+    for (const maxAccounts of [28, 20, 14, 8]) {
+      const jup = jupiterSwapper(owner, { [coll.mint]: coll.decimals, [debt.mint]: debt.decimals }, slippageBps, maxAccounts);
+      let res;
       try {
-        const luts = [...r.lookupTables.map((t) => t.address as string), ...jup.luts, ...marketLut];
-        const tx = await compile(owner, r.ixs, luts);
-        return {
-          txs: [tx],
-          summary: `Close your ${coll.symbol}/${debt.symbol} position: flash-repay ${num(n(repayUi), 4)} ${debt.symbol} by swapping ${coll.symbol} via Jupiter, then withdraw the remaining ${coll.symbol} to your wallet.`,
-          warnings: [`Swap slippage up to ${(slippageBps / 100).toFixed(2)}%. Sign promptly — the quote is only valid for a short time.`],
-        };
-      } catch (e) { lastErr = e; }
+        res = await getRepayWithCollIxs({
+          kaminoMarket: market, debtReserveAddress: addr(debt.reserve), collReserveAddress: addr(coll.reserve), owner: own, obligation: ob,
+          referrer: none(), currentLedgerInstant: li, repayAmount: new Decimal(repayUi.toString()), isClosingPosition: true,
+          // Flash-loan ixs encode absolute ix indexes, so the compute budget must be part of the SDK's ix list.
+          budgetAndPriorityFeeIxs: [
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: fee }),
+          ].map(fromWeb3),
+          scopeRefreshIx: [], logger: () => {}, useV2Ixs: true, slippagePct: new Decimal(slippageBps / 100),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          quoter: jup.quoter as any, swapper: jup.swapper as any,
+        });
+      } catch (e) { lastErr = e; continue; }
+      for (const r of res) {
+        try {
+          const luts = [...r.lookupTables.map((t) => t.address as string), ...jup.luts, ...marketLut];
+          const tx = await compile(owner, r.ixs, luts);
+          const size = Buffer.from(tx, "base64").length;
+          if (size > 1232) { lastErr = new Error(`transaction is ${size} bytes (max 1232)`); continue; }
+          return {
+            txs: [tx],
+            summary: `Close your ${coll.symbol}/${debt.symbol} position: flash-repay ${num(n(repayUi), 4)} ${debt.symbol} by swapping ${coll.symbol} via Jupiter, then withdraw the remaining ${coll.symbol} to your wallet.`,
+            warnings: [`Swap slippage up to ${(slippageBps / 100).toFixed(2)}%. Sign promptly — the quote is only valid for a short time.`],
+          };
+        } catch (e) { lastErr = e; }
+      }
     }
     throw new Error(`Couldn't fit the close into one transaction: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}. Repay and withdraw separately instead.`);
   }
 
   throw new Error(`Unknown Kamino action ${actionId}`);
+}
+
+async function ensureBalance(owner: string, mint: string, symbol: string, need: number) {
+  const have = await walletBalance(connection(), owner, mint);
+  if (have < need) throw new Error(`You hold ${num(have, 6)} ${symbol}; not enough to deposit ${num(need, 6)}.`);
 }
 
 // ---------- tool: deposit into the Main market ----------
@@ -303,6 +318,7 @@ export async function buildDepositTool(owner: string, params: Record<string, str
   const reserve = market.getFloatRateReserveBySymbol(sym) ?? market.getReserves().find((r) => r.symbol.toUpperCase() === sym.toUpperCase());
   if (!reserve) throw new Error(`Kamino Main market has no ${sym} reserve.`);
   if (!(Number(params.amount) > 0)) throw new Error("Enter an amount greater than zero.");
+  await ensureBalance(owner, reserve.getLiquidityMint(), reserve.symbol, Number(params.amount));
   const own = signer(owner);
   const existing = await market.getObligationByWallet(addr(owner), new VanillaObligation(PROGRAM_ID));
   const action = await KaminoAction.buildDepositTxns({
@@ -313,5 +329,8 @@ export async function buildDepositTool(owner: string, params: Record<string, str
   const lut = meta.get(MAIN_MARKET)?.lookupTable;
   const tx = await compile(owner, KaminoAction.actionToIxs(action), [...action.luts, ...(lut ? [lut] : [])]);
   const apy = reserve.totalSupplyAPY(li);
-  return { txs: [tx], summary: `Supply ${params.amount} ${reserve.symbol} to Kamino Lend (Main market) at ~${pct(apy, 2)} APY.` };
+  return {
+    txs: [tx], summary: `Supply ${params.amount} ${reserve.symbol} to Kamino Lend (Main market) at ~${pct(apy, 2)} APY.`,
+    warnings: existing ? undefined : ["First Kamino deposit: also creates your Kamino account (~0.02 SOL refundable rent)."],
+  };
 }

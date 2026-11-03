@@ -6,16 +6,17 @@
  * loaded with *only the banks those accounts use* (preloadedBankAddresses skips the bank gPA),
  * so a snapshot is a handful of RPC calls.
  *
- * build(): repay / withdraw (partial or all) / deposit per bank, close empty account.
+ * build(): repay / withdraw (partial or all) / deposit per bank.
  * Instructions come from the official SDK and are wrapped with buildTx().
  */
-import { Connection, PublicKey, type TransactionInstruction, type VersionedTransaction, type Transaction } from "@solana/web3.js";
+import { Connection, PublicKey, TransactionInstruction, type VersionedTransaction, type Transaction } from "@solana/web3.js";
+import { createAssociatedTokenAccountIdempotentInstruction, getAssociatedTokenAddressSync, NATIVE_MINT, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import {
-  MarginfiClient, MarginfiAccount, MarginfiAccountWrapper, MarginRequirementType, MARGINFI_IDL, getConfig,
+  MarginfiClient, MarginfiAccount, MarginfiAccountWrapper, MarginRequirementType, MARGINFI_IDL, getConfig, instructions, makeUnwrapSolIx,
   type Bank,
 } from "@mrgnlabs/marginfi-client-v2";
-import { AnchorProvider, BorshAccountsCoder, Program, type Idl } from "@coral-xyz/anchor";
-import { wrappedI80F48toBigNumber } from "@mrgnlabs/mrgn-common";
+import { BorshAccountsCoder, Program, type Idl } from "@coral-xyz/anchor";
+import { uiToNative, wrappedI80F48toBigNumber } from "@mrgnlabs/mrgn-common";
 import bs58 from "bs58";
 import type { Action, Adapter, BuiltAction, Ctx, Leg, Metric, Position, ToolDef } from "@/lib/core/types";
 import { buildTx, connection as sharedConnection, jupHeaders, num, pct, riskFromHealth, usd } from "@/lib/core/solana";
@@ -142,8 +143,7 @@ async function positions(owner: string, ctx: Ctx): Promise<Position[]> {
   if (!accounts.length) return [];
   const bankPks = [...new Set(accounts.flatMap((a) => a.balances.filter((b) => b.active).map((b) => b.bankPk.toBase58())))].map((s) => new PublicKey(s));
   if (!bankPks.length) {
-    // Only empty accounts: surface them so the user can close them (rent back).
-    return accounts.map((a) => emptyPosition(a.address.toBase58()));
+    return []; // only empty accounts (closing needs a newer program interface than the SDK has — see report)
   }
   const { supported, unsupported } = await probeBanks(conn, bankPks);
   const client = await loadClient(conn, ownerPk, supported);
@@ -154,7 +154,7 @@ async function positions(owner: string, ctx: Ctx): Promise<Position[]> {
   for (const acc of accounts) {
     const w = new MarginfiAccountWrapper(acc.address, client, acc);
     const active = w.activeBalances;
-    if (!active.length) { out.push(emptyPosition(acc.address.toBase58())); continue; }
+    if (!active.length) continue;
 
     const legs: Leg[] = [];
     const actions: Action[] = [];
@@ -240,7 +240,6 @@ async function positions(owner: string, ctx: Ctx): Promise<Position[]> {
     if (!hasUnsupported && equity > 0) metrics.push({ label: "Net APY", value: pct(netApy, 2), tone: netApy >= 0 ? "pos" : "neg" });
 
     if (hasUnsupported) metrics.push({ label: "Note", value: "Some banks read-only", tone: "muted" });
-    if (equity < 1 && borrowUsd < 0.01) actions.push({ id: "close", label: "Close account", intent: "close", danger: true });
     const supSyms = legs.filter((l) => l.side === "supply").map((l) => l.symbol);
     const borSyms = legs.filter((l) => l.side === "borrow").map((l) => l.symbol);
     out.push({
@@ -257,16 +256,6 @@ async function positions(owner: string, ctx: Ctx): Promise<Position[]> {
     });
   }
   return out;
-}
-
-function emptyPosition(account: string): Position {
-  return {
-    id: `marginfi:${account}`, protocol: "marginfi", kind: "lending",
-    title: "Empty marginfi account", subtitle: "No balances — close it to reclaim rent",
-    valueUsd: 0, legs: [], metrics: [], risk: { level: "ok", score: 2 },
-    actions: [{ id: "close", label: "Close account", intent: "close", danger: true }],
-    url: APP_URL, raw: { account, banks: {} }, updatedAt: Date.now(),
-  };
 }
 
 // ---------- build ----------
@@ -303,10 +292,38 @@ async function walletBalance(conn: Connection, owner: string, mint: PublicKey, t
   } catch { return Infinity; } // never block on a balance lookup failure; simulation will catch it
 }
 async function tokenBal(conn: Connection, owner: string, mint: PublicKey, tokenProgram?: PublicKey) {
-  const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
   const ata = getAssociatedTokenAddressSync(mint, new PublicKey(owner), true, tokenProgram);
   const r = await conn.getTokenAccountBalance(ata).catch(() => null);
   return r?.value.uiAmount ?? 0;
+}
+
+/** Kamino-backed banks (asset tag 3) price off a klend reserve that must be refreshed in the same slot. */
+async function kaminoRefreshIxs(conn: Connection, banks: PublicKey[], client: MarginfiClient, oracleKeys: Map<string, PublicKey[]>): Promise<TransactionInstruction[]> {
+  const reserves = banks.filter((b) => client.banks.get(b.toBase58())?.config.assetTag === 3)
+    .map((b) => oracleKeys.get(b.toBase58())?.[1]).filter((k): k is PublicKey => !!k);
+  if (!reserves.length) return [];
+  const { Reserve, PROGRAM_ID: KLEND } = await import("@kamino-finance/klend-sdk");
+  const klend = new PublicKey(KLEND);
+  const ais = await conn.getMultipleAccountsInfo(reserves);
+  const DEFAULT = PublicKey.default.toBase58();
+  const opt = (a: string) => (a && a !== DEFAULT ? new PublicKey(a) : klend);
+  return reserves.flatMap((r, i) => {
+    const ai = ais[i]; if (!ai) return [];
+    const rs = Reserve.decode(Buffer.from(ai.data));
+    const ti = rs.config.tokenInfo;
+    return [new TransactionInstruction({
+      programId: klend,
+      data: Buffer.from([2, 218, 138, 235, 79, 201, 25, 102]), // refresh_reserve
+      keys: [
+        { pubkey: r, isSigner: false, isWritable: true },
+        { pubkey: new PublicKey(rs.lendingMarket), isSigner: false, isWritable: false },
+        { pubkey: opt(ti.pythConfiguration.price), isSigner: false, isWritable: false },
+        { pubkey: opt(ti.switchboardConfiguration.priceAggregator), isSigner: false, isWritable: false },
+        { pubkey: opt(ti.switchboardConfiguration.twapAggregator), isSigner: false, isWritable: false },
+        { pubkey: opt(ti.scopeConfiguration.priceFeed), isSigner: false, isWritable: false },
+      ],
+    })];
+  });
 }
 
 const amountOf = (params: Record<string, string>) => {
@@ -319,16 +336,6 @@ async function build(owner: string, position: Position, actionId: string, params
   const conn = ctx.connection ?? sharedConnection();
   const raw = position.raw as { account: string; banks: Record<string, { symbol: string; supply: number; borrow: number }> };
   const [verb, bankStr] = actionId.split(":");
-  if (verb === "close") {
-    const ai = await conn.getAccountInfo(new PublicKey(raw.account));
-    if (!ai) throw new Error("Marginfi account not found");
-    const pure = MarginfiAccount.fromAccountDataRaw(new PublicKey(raw.account), ai.data, idl(conn));
-    if (!pure.authority.equals(new PublicKey(owner))) throw new Error("This marginfi account belongs to another wallet");
-    if (pure.activeBalances.length) throw new Error("Withdraw and repay everything before closing the account");
-    const program = new Program({ ...MARGINFI_IDL, address: PROGRAM.toBase58() } as typeof MARGINFI_IDL, new AnchorProvider(conn, roWallet(new PublicKey(owner)), {}));
-    const ix = await pure.makeCloseAccountIx(program as never);
-    return { txs: [await buildTx(owner, ix.instructions, { cuLimit: 100_000 })], summary: "Close your empty marginfi account and reclaim its rent." };
-  }
   if (!bankStr) throw new Error(`Unknown action ${actionId}`);
   const bankPk = new PublicKey(bankStr);
   const { w, client, unsupported, oracleKeys } = await wrapperFor(conn, owner, raw.account, [bankStr]);
@@ -357,9 +364,22 @@ async function build(owner: string, position: Position, actionId: string, params
     if (sup <= 0) throw new Error(`No ${symbol} deposit on this account`);
     const all = amount >= sup * 0.999;
     const crank = await crankTx(owner, w, []);
-    const observationBanksOverride = healthMetas(w.activeBalances.map((b) => b.bankPk), oracleKeys, bankPk, all);
-    const ix = await w.makeWithdrawIx(all ? sup : amount, bankPk, all, { observationBanksOverride });
-    const tx = await buildTx(owner, [...ix.instructions as TransactionInstruction[]], { luts, cuLimit: 600_000 });
+    const active = w.activeBalances.map((b) => b.bankPk);
+    const metas = healthMetas(active, oracleKeys, bankPk, all);
+    const tokenProgram = client.mintDatas.get(bankStr)!.tokenProgram;
+    const ownerPk = new PublicKey(owner);
+    const ata = getAssociatedTokenAddressSync(bank.mint, ownerPk, true, tokenProgram);
+    // Built directly (not w.makeWithdrawIx): the SDK resolves every active bank from its own map and
+    // throws for banks it can't decode; Kamino-backed banks also need their reserve refreshed this slot.
+    const ixs: TransactionInstruction[] = [
+      ...(await kaminoRefreshIxs(conn, active.filter((b) => !(all && b.equals(bankPk))), client, oracleKeys)),
+      createAssociatedTokenAccountIdempotentInstruction(ownerPk, ata, ownerPk, bank.mint, tokenProgram),
+      await instructions.makeWithdrawIx(client.program, { marginfiAccount: w.address, bank: bankPk, destinationTokenAccount: ata, tokenProgram },
+        { amount: uiToNative(all ? sup : amount, bank.mintDecimals), withdrawAll: all },
+        [...(tokenProgram.equals(TOKEN_2022_PROGRAM_ID) ? [bank.mint] : []), ...metas].map((pubkey) => ({ pubkey, isSigner: false, isWritable: false }))),
+      ...(bank.mint.equals(NATIVE_MINT) ? [makeUnwrapSolIx(ownerPk)] : []),
+    ];
+    const tx = await buildTx(owner, ixs, { luts, cuLimit: 800_000 });
     return { txs: [...crank, tx], summary: all ? `Withdraw all ${num(sup)} ${symbol} from marginfi.` : `Withdraw ${num(amount)} ${symbol} from marginfi.` };
   }
   if (verb === "deposit") {
@@ -404,7 +424,7 @@ async function buildTool(owner: string, toolId: string, params: Record<string, s
   if (!banks.length) throw new Error("Marginfi has no bank for that token");
   const acc = accounts.sort((a, b) => b.activeBalances.length - a.activeBalances.length)[0];
   const { w, client } = await wrapperFor(conn, owner, acc.address.toBase58(), banks.map((b) => b.pubkey.toBase58()));
-  const best = [...client.banks.values()].filter((b) => b.mint.equals(mint))
+  const best = [...client.banks.values()].filter((b) => b.mint.equals(mint) && b.config.assetTag < 3)
     .sort((a, b) => n(b.getTotalAssetQuantity()) - n(a.getTotalAssetQuantity()))[0];
   if (!best) throw new Error("Marginfi has no bank for that token");
   const ix = await w.makeDepositIx(amount, best.address);

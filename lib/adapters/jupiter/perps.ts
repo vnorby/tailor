@@ -30,6 +30,8 @@ interface TxResp { serializedTxBase64?: string | null; requireKeeperSignature?: 
 
 /** USD value from a field that's either "1234.56" (formatted) or "1234560000" (6-dp raw). */
 const usdField = (formatted?: string, raw?: string) => formatted != null ? n(formatted) : n(raw) / 1e6;
+/** perps-api mixes "69420.00" (formatted) and "69420000000" (6-dp raw) for the same field across endpoints. */
+const smartUsd = (v?: string | null) => (v == null ? 0 : v.includes(".") ? n(v) : n(v) / 1e6);
 const sym = (mint?: string) => (mint && KNOWN[mint]?.symbol) || mint?.slice(0, 4) || "?";
 const appUrl = (mint?: string) => `https://jup.ag/perps/${sym(mint).toLowerCase()}`;
 const toRaw6 = (x: number) => BigInt(Math.round(x * 1e6)).toString();
@@ -73,7 +75,7 @@ function perpToPosition(p: ApiPosition, maxWithdrawUsd?: number): Position {
 
   const collSym = sym(p.collateralMint);
   const receiveOpts = [...new Set([collSym, "USDC", asset].filter((s) => ["SOL", "ETH", "BTC", "USDC"].includes(s)))].map((s) => ({ value: s, label: s }));
-  const tpsl = (p.tpslRequests ?? []).map((t) => ({ pubkey: t.positionRequestPubkey, type: t.requestType, price: n(t.triggerPriceUsd ?? (t.triggerPrice ? n(t.triggerPrice) / 1e6 : 0)), pctOfSize: n(t.sizePercentage, 100) }));
+  const tpsl = (p.tpslRequests ?? []).map((t) => ({ pubkey: t.positionRequestPubkey, type: t.requestType, price: t.triggerPriceUsd != null ? n(t.triggerPriceUsd) : smartUsd(t.triggerPrice), pctOfSize: n(t.sizePercentage, 100) }));
   const tp = tpsl.find((t) => t.type === "tp"), sl = tpsl.find((t) => t.type === "sl");
 
   const actions: Action[] = [
@@ -163,14 +165,14 @@ export async function perpLimitOrders(owner: string): Promise<Position[]> {
   return (res.dataList ?? []).filter((o) => !o.executed).map((o) => {
     const market = o.marketMint ?? o.custody;
     const asset = sym(market);
-    const size = usdField(o.sizeUsd?.includes(".") ? o.sizeUsd : undefined, o.sizeUsdDelta ?? o.sizeUsd);
-    const coll = usdField(o.collateralUsd?.includes(".") ? o.collateralUsd : undefined, o.collateralUsd);
-    const trig = o.triggerPriceUsd != null ? n(o.triggerPriceUsd) : n(o.triggerPrice) / 1e6;
+    const size = smartUsd(o.sizeUsd ?? o.sizeUsdDelta);
+    const coll = smartUsd(o.collateralUsd);
+    const trig = smartUsd(o.triggerPriceUsd ?? o.triggerPrice);
     return {
       id: `jupiter:${o.positionRequestPubkey}`, protocol: "jupiter", kind: "order",
       title: `${asset}-PERP limit ${o.side}`, subtitle: `Jupiter Perps · trigger ${usd(trig)}`,
       valueUsd: coll, legs: [{ side: o.side, symbol: asset, mint: market, amount: trig ? size / trig : 0, valueUsd: size }],
-      metrics: [{ label: "Trigger", value: usd(trig) }, { label: "Size", value: usd(size, 0) }, { label: "Collateral", value: usd(coll) }, ...(o.liquidationPriceUsd ? [{ label: "Liq. after fill", value: usd(usdField(o.liquidationPriceUsd.includes(".") ? o.liquidationPriceUsd : undefined, o.liquidationPriceUsd)) }] : [])],
+      metrics: [{ label: "Trigger", value: usd(trig) }, { label: "Size", value: usd(size, 0) }, { label: "Collateral", value: usd(coll) }, ...(o.liquidationPriceUsd ? [{ label: "Liq. after fill", value: usd(smartUsd(o.liquidationPriceUsd)) }] : [])],
       risk: { level: "ok", score: 15, reason: "Waiting for trigger price" },
       actions: [{ id: "cancel-limit", label: "Cancel order", intent: "cancel" }],
       url: appUrl(market),

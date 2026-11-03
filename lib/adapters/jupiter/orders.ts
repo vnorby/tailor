@@ -5,7 +5,7 @@
  * signing a challenge, so it doesn't fit a read-from-address wallet yet.)
  */
 import type { BuiltAction, Ctx, Position } from "@/lib/core/types";
-import { num, pct, usd } from "@/lib/core/solana";
+import { num, pct } from "@/lib/core/solana";
 import { JUP, jfetch, n, tokenMeta } from "./http";
 
 interface TriggerOrder {
@@ -90,6 +90,8 @@ export async function recurringOrders(owner: string, ctx: Ctx): Promise<Position
     const avg = used > 0 ? received / used : undefined;
     const valueUsd = remaining * (px[o.inputMint] ?? 0);
     const nearEnd = cyclesLeft <= 1;
+    // Should have finished long ago but still holds funds (unpriced/illiquid token, no route): stalled.
+    const stalled = cyclesLeft > 0 && Date.parse(o.createdAt) + (totalCycles + 2) * freq * 1000 + 3_600_000 < now;
     return {
       id: `jupiter:${o.orderKey}`, protocol: "jupiter", kind: "order",
       title: `DCA ${i.symbol} → ${out.symbol}`,
@@ -101,9 +103,11 @@ export async function recurringOrders(owner: string, ctx: Ctx): Promise<Position
         { label: "Left", value: `${num(remaining)} ${i.symbol}` },
         { label: "Received", value: `${num(received)} ${out.symbol}` },
         ...(avg ? [{ label: "Avg price", value: `${num(avg, 6)} ${out.symbol}/${i.symbol}`, tone: "muted" as const }] : []),
-        { label: "Ends in", value: cyclesLeft ? dur(cyclesLeft * freq) : "done", tone: nearEnd ? "warn" : "muted" },
+        { label: "Ends in", value: stalled ? "stalled" : cyclesLeft ? dur(cyclesLeft * freq) : "done", tone: nearEnd || stalled ? "warn" : "muted" },
       ],
-      risk: nearEnd
+      risk: stalled
+        ? { level: "watch", score: 45, reason: "Stalled — buys aren't executing; cancel to reclaim funds" }
+        : nearEnd
         ? { level: "watch", score: 40, reason: cyclesLeft ? "Last buy pending" : "Finished — nothing left to swap" }
         : { level: "ok", score: Math.min(20, 5 + Math.round(Math.log10(1 + valueUsd) * 3)), reason: `${cyclesLeft} buys left` },
       actions: [{ id: "cancel-recurring", label: "Cancel DCA", intent: "cancel" }],

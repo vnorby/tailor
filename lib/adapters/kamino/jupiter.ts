@@ -18,6 +18,17 @@ const toKit = (ix: JupIx): Instruction => ({
   data: new Uint8Array(Buffer.from(ix.data, "base64")),
 }) as Instruction;
 
+/** Jupiter's keyless endpoint rate-limits bursts; back off briefly on 429. */
+async function jfetch(url: string, init: RequestInit = {}): Promise<Response> {
+  let r: Response | null = null;
+  for (let i = 0; i < 4; i++) {
+    r = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(8000) });
+    if (r.status !== 429) return r;
+    await new Promise((res) => setTimeout(res, 700 * (i + 1)));
+  }
+  return r!;
+}
+
 interface SwapInputs { inputAmountLamports: Decimal; minOutAmountLamports?: Decimal; inputMint: string; outputMint: string }
 
 export function jupiterSwapper(owner: string, decimals: Record<string, number>, slippageBps: number, maxAccounts = 28) {
@@ -29,7 +40,7 @@ export function jupiterSwapper(owner: string, decimals: Record<string, number>, 
       inputMint: inp.inputMint, outputMint: inp.outputMint, amount, slippageBps: String(slippageBps),
       maxAccounts: String(maxAccounts), swapMode: "ExactIn",
     });
-    const r = await fetch(`${base()}/quote?${q}`, { headers: jupHeaders(), cache: "no-store", signal: AbortSignal.timeout(8000) });
+    const r = await jfetch(`${base()}/quote?${q}`, { headers: jupHeaders() });
     if (!r.ok) throw new Error(`Jupiter quote failed (${r.status}): ${(await r.text()).slice(0, 160)}`);
     return (await r.json()) as JupQuote;
   }
@@ -46,8 +57,8 @@ export function jupiterSwapper(owner: string, decimals: Record<string, number>, 
 
   const swapper = async (inp: SwapInputs) => {
     const q = await quote(inp); // re-quote for the exact sized input
-    const r = await fetch(`${base()}/swap-instructions`, {
-      method: "POST", headers: { "content-type": "application/json", ...jupHeaders() }, cache: "no-store", signal: AbortSignal.timeout(8000),
+    const r = await jfetch(`${base()}/swap-instructions`, {
+      method: "POST", headers: { "content-type": "application/json", ...jupHeaders() },
       body: JSON.stringify({ quoteResponse: q, userPublicKey: owner, wrapAndUnwrapSol: false, useSharedAccounts: true, dynamicComputeUnitLimit: false }),
     });
     if (!r.ok) throw new Error(`Jupiter swap-instructions failed (${r.status}): ${(await r.text()).slice(0, 160)}`);

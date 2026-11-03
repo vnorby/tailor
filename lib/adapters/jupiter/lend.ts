@@ -2,10 +2,10 @@
  * Jupiter Lend (Earn jlTokens + Borrow vaults) via api.jup.ag/lend/v1, and JLP
  * loans (borrow USDC against JLP) via perps-api. All return ready unsigned txs.
  */
-import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction, createSyncNativeInstruction, getAssociatedTokenAddressSync, NATIVE_MINT } from "@solana/spl-token";
+import { PublicKey, SystemProgram, TransactionInstruction } from "@solana/web3.js";
+import { createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction, createSyncNativeInstruction, getAssociatedTokenAddressSync, NATIVE_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { BuiltAction, Ctx, Position } from "@/lib/core/types";
-import { buildTx, num, pct, riskFromHealth, usd } from "@/lib/core/solana";
+import { buildTx, connection, lookupTables, num, pct, riskFromHealth, usd } from "@/lib/core/solana";
 import { JLP, JUP, PERPS, SOL, USDC, jfetch, n } from "./http";
 
 const MIN_I128 = "-170141183460469231731687303715884105728";
@@ -79,10 +79,14 @@ export async function borrowPositions(owner: string): Promise<Position[]> {
     const ltv = collUsd > 0 ? debtUsd / collUsd : 0;
     const lt = n(v.liquidationThreshold) / 1000, maxLtv = n(v.collateralFactor) / 1000;
     const supplyApy = n(v.supplyRate) / 1e4, borrowApy = n(v.borrowRate) / 1e4;
-    // Liquidation price of collateral (in debt-token terms × debt price) when LTV hits the threshold.
-    const liqPrice = debt > 0 && coll > 0 && lt > 0 ? (debtUsd / (coll * lt)) : undefined;
+    // Liquidation price of the collateral at LTV = threshold. Against a stable debt it's a USD
+    // price; against a volatile debt (JitoSOL/SOL) it's the cross rate, which is what actually moves.
+    const stableDebt = Math.abs(dp - 1) < 0.05;
+    const liqPrice = debt > 0 && coll > 0 && lt > 0 ? (stableDebt ? debtUsd : debt) / (coll * lt) : undefined;
+    const markPrice = stableDebt ? cp : dp > 0 ? cp / dp : undefined;
+    const fmtPx = (x: number) => (stableDebt ? usd(x) : `${num(x, 4)} ${ds}`);
     const risk = debt > 0
-      ? riskFromHealth(lt > 0 ? (1 - ltv / lt) * 100 : 100, `LTV ${pct(ltv)} vs ${pct(lt, 0)} liquidation`, { liqPrice, markPrice: cp })
+      ? riskFromHealth(lt > 0 ? (1 - ltv / lt) * 100 : 100, `LTV ${pct(ltv)} vs ${pct(lt, 0)} liquidation`, { liqPrice, markPrice })
       : { level: "ok" as const, score: 5, reason: "No debt" };
     const actions: Position["actions"] = [];
     if (debt > 0) actions.push({ id: "borrow-repay", label: `Repay ${ds}`, intent: "repay", fields: [{ name: "amount", label: "Amount", kind: "amount", unit: ds, max: debt }] });
@@ -102,7 +106,7 @@ export async function borrowPositions(owner: string): Promise<Position[]> {
         { label: "LTV", value: `${pct(ltv)} / ${pct(lt, 0)}`, tone: risk.level === "danger" ? "neg" : risk.level === "watch" ? "warn" : undefined },
         { label: "Collateral", value: `${num(coll)} ${cs}` },
         ...(debt > 0 ? [{ label: "Debt", value: `${num(debt, 2)} ${ds}` }, { label: "Borrow APY", value: pct(borrowApy, 2), tone: "muted" as const }] : []),
-        ...(liqPrice ? [{ label: `${cs} liq. price`, value: usd(liqPrice) }] : []),
+        ...(liqPrice ? [{ label: `${cs} liq. price`, value: `${fmtPx(liqPrice)}${markPrice ? ` (now ${fmtPx(markPrice)})` : ""}` }] : []),
       ],
       risk, actions, url: "https://jup.ag/lend/borrow",
       raw: { kind: "borrow", vaultId: p.vaultId, positionId: p.id, coll, debt, collMint: v.supplyToken.address, collDecimals: v.supplyToken.decimals, collSym: cs, debtMint: v.borrowToken.address, debtDecimals: v.borrowToken.decimals, debtSym: ds },
@@ -111,31 +115,45 @@ export async function borrowPositions(owner: string): Promise<Position[]> {
   });
 }
 
+interface ApiIx { programId: string; accounts: { pubkey: string; isSigner: boolean; isWritable: boolean }[]; data: string }
+const toIx = (i: ApiIx) => new TransactionInstruction({
+  programId: new PublicKey(i.programId),
+  keys: i.accounts.map((a) => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+  data: Buffer.from(i.data, "base64"),
+});
+
+/**
+ * Repay / withdraw on a Borrow vault as ONE v0 tx: the operate ix from
+ * /borrow/operate-instructions, wrapped with what the program and API leave to us —
+ * both token accounts must exist (the program checks the collateral ATA even on a
+ * repay), SOL debt must be pre-wrapped, and WSOL received is unwrapped at the end.
+ */
 export async function buildBorrow(owner: string, pos: Position, actionId: string, params: Record<string, string>, ctx?: Ctx): Promise<BuiltAction> {
   const raw = pos.raw as { vaultId: number; positionId: number; coll: number; debt: number; collMint: string; collDecimals: number; collSym: string; debtMint: string; debtDecimals: number; debtSym: string };
   const amt = Number(params.amount);
   if (!(amt > 0)) throw new Error("Enter an amount greater than zero.");
   const o = new PublicKey(owner);
-  const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, o);
-  const txs: string[] = [];
   const warnings: string[] = [];
   let colAmount = "0", debtAmount = "0", summary: string;
+  const pre: TransactionInstruction[] = [], post: TransactionInstruction[] = [];
+
+  // Token program per mint (classic or Token-2022) so ATA derivation is right.
+  const mints = [raw.collMint, raw.debtMint].map((m) => new PublicKey(m));
+  const infos = await connection().getMultipleAccountsInfo(mints);
+  const progs = infos.map((i) => (i?.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID));
+  mints.forEach((m, i) => pre.push(createAssociatedTokenAccountIdempotentInstruction(o, getAssociatedTokenAddressSync(m, o, false, progs[i]), o, m, progs[i])));
+  const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, o);
 
   if (actionId === "borrow-repay") {
     const all = amt >= raw.debt * 0.9999;
     debtAmount = all ? MIN_I128 : "-" + toAtomic(params.amount, raw.debtDecimals);
     summary = `Repay ${all ? `all ~${num(raw.debt, 4)}` : num(amt)} ${raw.debtSym} on your ${raw.collSym}/${raw.debtSym} Jupiter Lend position.`;
-    const held = ctx?.tokens.find((t) => t.mint === raw.debtMint)?.amount;
+    const held = ctx?.tokens.length ? (ctx.tokens.find((t) => t.mint === raw.debtMint)?.amount ?? 0) : undefined;
     if (held != null && held < Math.min(amt, raw.debt)) warnings.push(`You hold only ${num(held)} ${raw.debtSym}; swap for more first or the repay will fail.`);
     if (raw.debtMint === SOL) {
-      // The API doesn't wrap SOL: fund the WSOL account first (slight buffer for accrued interest).
+      // The API doesn't wrap SOL; buffer covers interest accrued since the snapshot.
       const lamports = BigInt(toAtomic((all ? raw.debt * 1.001 : amt).toFixed(9), 9)) + BigInt(10_000);
-      txs.push(await buildTx(owner, [
-        createAssociatedTokenAccountIdempotentInstruction(o, wsolAta, o, NATIVE_MINT),
-        SystemProgram.transfer({ fromPubkey: o, toPubkey: wsolAta, lamports }),
-        createSyncNativeInstruction(wsolAta),
-      ], { cuLimit: 60_000 }));
-      warnings.push("Two transactions: wrap SOL, then repay.");
+      pre.push(SystemProgram.transfer({ fromPubkey: o, toPubkey: wsolAta, lamports }), createSyncNativeInstruction(wsolAta));
     }
   } else if (actionId === "borrow-withdraw") {
     const all = amt >= raw.coll * 0.9999 && raw.debt === 0;
@@ -143,15 +161,13 @@ export async function buildBorrow(owner: string, pos: Position, actionId: string
     summary = `Withdraw ${all ? `all ~${num(raw.coll)}` : num(amt)} ${raw.collSym} collateral from your Jupiter Lend position.`;
     if (raw.debt > 0) warnings.push("Withdrawing collateral raises your LTV and liquidation price.");
   } else throw new Error(`Unknown borrow action ${actionId}`);
+  // Leave native SOL, not WSOL, behind (also returns the temp account's rent).
+  if (raw.collMint === SOL || raw.debtMint === SOL) post.push(createCloseAccountInstruction(wsolAta, o, o));
 
-  const r = await jfetch<{ transaction?: string }>(`${JUP}/lend/v1/borrow/operate`, { body: { vaultId: raw.vaultId, positionId: raw.positionId, positionOwner: owner, signer: owner, colAmount, debtAmount } });
-  if (!r.transaction) throw new Error("Jupiter Lend returned no transaction.");
-  txs.push(r.transaction);
-  if (actionId === "borrow-withdraw" && raw.collMint === SOL) {
-    txs.push(await buildTx(owner, [createCloseAccountInstruction(wsolAta, o, o)], { cuLimit: 20_000 }));
-    warnings.push("A second transaction unwraps the withdrawn WSOL to native SOL.");
-  }
-  return { txs, summary, warnings: warnings.length ? warnings : undefined };
+  const r = await jfetch<{ instructions?: ApiIx[]; addressLookupTableAddresses?: string[] }>(`${JUP}/lend/v1/borrow/operate-instructions`, { body: { vaultId: raw.vaultId, positionId: raw.positionId, positionOwner: owner, signer: owner, colAmount, debtAmount } });
+  if (!r.instructions?.length) throw new Error("Jupiter Lend returned no instructions.");
+  const tx = await buildTx(owner, [...pre, ...r.instructions.map(toIx), ...post], { luts: await lookupTables(r.addressLookupTableAddresses ?? []), cuLimit: 800_000 });
+  return { txs: [tx], summary, warnings: warnings.length ? warnings : undefined };
 }
 
 // ---------- JLP loans (perps-api) ----------
