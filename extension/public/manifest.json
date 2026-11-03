@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Tailor",
+  "version": "0.1.0",
+  "description": "A Solana wallet cut to fit: it reads all your DeFi positions and builds itself around what you do. Ask it for anything.",
+  "action": { "default_popup": "popup.html", "default_title": "Tailor", "default_icon": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" } },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["storage", "alarms", "sidePanel"],
+  "content_scripts": [
+    { "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"], "js": ["provider.js"], "run_at": "document_start", "world": "MAIN" },
+    { "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"], "js": ["bridge.js"], "run_at": "document_start" }
+  ],
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'self'" }
+}

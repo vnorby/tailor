@@ -39,9 +39,10 @@ function N({ n, scope: parent }: { n: Node; scope: Scope }) {
   const scope = useScope(n as { positionId?: string }, parent);
   const t = (s?: string) => (s ? template(s, scope) : "");
   switch (n.type) {
-    case "row": return <div className={`flex flex-wrap gap-x-4 gap-y-2 items-center ${n.align === "between" ? "justify-between" : n.align === "end" ? "justify-end" : n.align === "center" ? "justify-center" : ""}`}>{n.children.map((c, i) => <N key={i} n={c} scope={scope} />)}</div>;
+    case "row": return <div className={`flex flex-wrap gap-x-5 gap-y-3 items-center ${n.align === "between" ? "justify-between" : n.align === "end" ? "justify-end" : n.align === "center" ? "justify-center" : ""}`}>{n.children.map((c, i) => <N key={i} n={c} scope={scope} />)}</div>;
     case "stack": return <div className={`flex flex-col ${n.gap === "s" ? "gap-1" : n.gap === "l" ? "gap-4" : "gap-2"}`}>{n.children.map((c, i) => <N key={i} n={c} scope={scope} />)}</div>;
-    case "grid": return <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${n.cols}, minmax(0, 1fr))` }}>{n.children.map((c, i) => <N key={i} n={c} scope={scope} />)}</div>;
+    // At most `cols` columns, fewer when the card is narrow, so values never collide.
+    case "grid": return <div className="grid gap-x-4 gap-y-3" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(max(7.5rem, calc((100% - ${n.cols - 1}rem) / ${n.cols})), 1fr))` }}>{n.children.map((c, i) => <N key={i} n={c} scope={scope} />)}</div>;
     case "heading": {
       const size = { xl: "text-[34px] leading-[1.02]", l: "text-[26px] leading-[1.08]", m: "text-[19px] leading-tight", s: "text-[15px] leading-snug" }[n.size ?? "m"];
       return <h3 className={`${n.font === "sans" ? "font-sans font-semibold" : "font-serif"} ${size} text-balance`}>{t(n.text)}</h3>;
@@ -49,17 +50,19 @@ function N({ n, scope: parent }: { n: Node; scope: Scope }) {
     case "text": return <p className={`${TONE[n.tone ?? "default"]} ${n.size === "s" ? "text-[12.5px]" : n.size === "l" ? "text-[16px]" : "text-[14px]"} leading-snug`}>{t(n.text)}</p>;
     case "eyebrow": {
       const proto = n.protocol ? PROTOCOLS[n.protocol as keyof typeof PROTOCOLS] : undefined;
-      return <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.12em] text-dim">{proto && <span className="size-1.5 rounded-full" style={{ background: proto.color }} />}{t(n.text)}</div>;
+      // The dot aligns with the first line when the label wraps.
+      return <div className="flex items-start gap-1.5 text-[11px] leading-[1.35] uppercase tracking-[0.12em] text-dim">{proto && <span className="mt-[5px] size-1.5 shrink-0 rounded-full" style={{ background: proto.color }} />}<span>{t(n.text)}</span></div>;
     }
     case "pill": return <span className={`inline-block w-fit rounded-md px-2 py-0.5 text-[11.5px] font-semibold ${TONE_BG[n.tone ?? "default"]}`}>{t(n.text)}</span>;
     case "callout": return <p className={`rounded-lg px-3 py-2 text-[13px] leading-snug ${TONE_BG[n.tone ?? "dim"]}`}>{t(n.text)}</p>;
     case "divider": return <hr className="border-line" />;
     case "stat": {
-      const size = { s: "text-[14px]", m: "text-[18px]", l: "text-[26px]", xl: "text-[42px] font-serif !tracking-normal" }[n.size ?? "m"];
+      const size = { s: "text-[14px]", m: "text-[18px]", l: "text-[22px]", xl: "text-[40px] font-serif !tracking-normal" }[n.size ?? "m"];
+      // Stats never shrink into each other: in a row they wrap to the next line instead.
       return (
-        <div className="min-w-0">
+        <div className="shrink-0 max-w-full">
           {n.label && <div className="text-[11px] text-faint">{t(n.label)}</div>}
-          <div className={`num ${size} ${TONE[n.tone ?? "default"]} leading-tight`}>{t(n.value)}</div>
+          <div className={`num ${size} ${TONE[n.tone ?? "default"]} leading-tight whitespace-nowrap`}>{t(n.value)}</div>
           {n.sub && <div className="text-[12px] text-dim">{t(n.sub)}</div>}
         </div>
       );

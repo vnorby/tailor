@@ -11,7 +11,7 @@ export interface Preview {
 
 /** Simulated effect of a transaction on the wallet: what goes out, what comes in. */
 export function BalanceChanges({ preview, compact }: { preview: Preview; compact?: boolean }) {
-  if (!preview.ok) return <p className="text-[13px] text-danger">Simulation failed: {preview.error}</p>;
+  if (!preview.ok) return <p className="text-[13px] text-danger">{/^simulation failed/i.test(preview.error ?? "") ? preview.error : `Simulation failed: ${preview.error}`}</p>;
   const rows = preview.changes.filter((c) => Math.abs(c.delta) > 0);
   return (
     <div className="rounded-xl border border-line bg-cloth/60 p-3 flex flex-col gap-2">

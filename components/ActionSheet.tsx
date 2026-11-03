@@ -19,7 +19,7 @@ export interface Executor {
 
 type Target =
   | { kind: "action"; position: Position; action: Action; params?: Record<string, string> }
-  | { kind: "tool"; tool: ToolDef; params: Record<string, string> };
+  | { kind: "tool"; tool: ToolDef; params: Record<string, string>; form?: boolean };
 
 interface Prepared { txs: string[]; summary: string; warnings?: string[]; simulations: { ok: boolean; error?: string }[]; preview?: Preview | null }
 
@@ -62,7 +62,7 @@ function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(
     return init;
   });
   // Tools and what-if sliders arrive with their inputs already chosen, so build straight away.
-  const direct = !fields.length || target.kind === "tool" || (!!target.params && fields.every((f) => target.params?.[f.name] != null || f.default != null));
+  const direct = !fields.length || (target.kind === "tool" && !target.form) || (!!target.params && fields.every((f) => target.params?.[f.name] != null || f.default != null));
   const [stage, setStage] = useState<Stage>({ s: direct ? "preparing" : "form" });
   const label = target.kind === "action" ? target.action.label : target.tool.label;
   const danger = target.kind === "action" && target.action.danger;
