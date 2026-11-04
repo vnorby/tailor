@@ -216,3 +216,21 @@ export async function activeAccount(): Promise<AccountMeta | null> {
   const m = await getMeta();
   return m.accounts.find((a) => a.id === m.activeId) ?? null;
 }
+
+/** The vault key, released only after re-entering the password (used to set up passkey unlock). */
+export async function exportVaultKey(password: string): Promise<string> {
+  const sealed = await getSealed();
+  if (!sealed) throw new Error("No wallet.");
+  const key = await deriveKey(password, b64.dec(sealed.kdf.salt), sealed.kdf.iterations);
+  try { await open<Secrets>(sealed, key); } catch { throw new Error("Wrong password."); }
+  return exportKey(key);
+}
+
+/** Unlock with a raw vault key (recovered via passkey). The vault itself proves the key is right. */
+export async function unlockWithKey(raw: string) {
+  const sealed = await getSealed();
+  if (!sealed) throw new Error("No wallet yet.");
+  let key: CryptoKey;
+  try { key = await importAesKey(raw); secrets = await open<Secrets>(sealed, key); } catch { throw new Error("That passkey no longer unlocks this wallet. Use your password."); }
+  await startSession(key);
+}

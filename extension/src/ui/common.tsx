@@ -4,6 +4,8 @@ import { call, type AccountMeta, type WalletState } from "~/shared/messages";
 import type { Executor } from "@/components/ActionSheet";
 import "./styles.css";
 import { watchTheme } from "./theme";
+import { passkeyRecord, unlockWithPasskey } from "./passkey";
+import { Fingerprint } from "@phosphor-icons/react";
 
 export function mount(node: ReactNode) {
   watchTheme();
@@ -49,15 +51,22 @@ export function Unlock({ onUnlocked, compact }: { onUnlocked(s: WalletState): vo
   const [pw, setPw] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hasPasskey, setHasPasskey] = useState(false);
+  useEffect(() => { void passkeyRecord().then((r) => setHasPasskey(!!r)); }, []);
+  const withPasskey = async () => {
+    setBusy(true); setErr(null);
+    try { onUnlocked(await unlockWithPasskey()); } catch (x) { setErr(x instanceof Error ? x.message : String(x)); setBusy(false); }
+  };
   return (
     <form className={`flex flex-col gap-3 ${compact ? "" : "flex-1 justify-center px-6"}`} onSubmit={async (e) => {
       e.preventDefault(); setBusy(true); setErr(null);
       try { onUnlocked(await call<WalletState>({ type: "unlock", password: pw })); } catch (x) { setErr(x instanceof Error ? x.message : String(x)); setBusy(false); }
     }}>
-      {!compact && <><Logo size={44} /><div className="tape" /><p className="text-dim text-[14px]">Enter your password to unlock.</p></>}
+      {!compact && <><Logo size={44} /><div className="tape" /><p className="text-dim text-[14px]">{hasPasskey ? "Unlock with your passkey or password." : "Enter your password to unlock."}</p></>}
+      {hasPasskey && <button type="button" className="btn btn-primary justify-center !py-2.5" disabled={busy} onClick={withPasskey}><Fingerprint size={17} weight="fill" />Unlock with Touch ID / passkey</button>}
       <input className="input" type="password" autoFocus placeholder="Password" value={pw} onChange={(e) => setPw(e.target.value)} />
       {err && <p className="text-danger text-[13px]">{err}</p>}
-      <button className="btn btn-primary justify-center" disabled={!pw || busy}>{busy ? "Unlocking…" : "Unlock"}</button>
+      <button className={`btn justify-center ${hasPasskey ? "" : "btn-primary"}`} disabled={!pw || busy}>{busy ? "Unlocking…" : "Unlock with password"}</button>
     </form>
   );
 }

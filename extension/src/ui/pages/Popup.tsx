@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, GearSix, LockSimple, SidebarSimple } from "@phosphor-icons/react";
 import { Home } from "../home/Home";
+import { disablePasskey, enablePasskey, passkeyRecord, passkeysAvailable } from "../passkey";
 import { call, type WalletState } from "~/shared/messages";
 import { AccountSwitcher, Logo, mount, short, Unlock, useWalletState } from "../common";
 import { Checkup } from "../security/Checkup";
@@ -95,6 +96,7 @@ function Settings({ state, activeId, onBack, refresh }: { state: WalletState; ac
           <Checkup state={state} active={active} />
         </section>
       )}
+      <PasskeySetting />
       <section className="flex flex-col gap-2">
         <h3 className="text-[11px] uppercase tracking-[0.12em] text-faint">Look</h3>
         <button className="btn justify-center" onClick={() => chrome.tabs.create({ url: "onboarding.html" })}>Restyle wallet</button>
@@ -139,3 +141,32 @@ function Frame({ children }: { children: React.ReactNode }) {
 }
 
 mount(<Popup />);
+
+function PasskeySetting() {
+  const [on, setOn] = useState<boolean | null>(null);
+  const [pw, setPw] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { void passkeyRecord().then((r) => setOn(!!r)); }, []);
+  if (on === null || !passkeysAvailable()) return null;
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="text-[11px] uppercase tracking-[0.12em] text-faint">Unlock</h3>
+      {on ? (
+        <div className="flex items-center justify-between"><span className="text-dim">Touch ID / passkey unlock is on.</span><button className="btn !py-1 !px-2 text-[12px]" onClick={async () => { await disablePasskey(); setOn(false); }}>Turn off</button></div>
+      ) : asking ? (
+        <form className="flex flex-col gap-2" onSubmit={async (e) => {
+          e.preventDefault(); setBusy(true); setErr(null);
+          try { await enablePasskey(pw); setOn(true); setAsking(false); setPw(""); } catch (x) { setErr(x instanceof Error ? x.message : String(x)); } finally { setBusy(false); }
+        }}>
+          <input className="input" type="password" autoFocus placeholder="Confirm your password" value={pw} onChange={(e) => setPw(e.target.value)} />
+          {err && <p className="text-danger text-[12px]">{err}</p>}
+          <div className="flex gap-2"><button className="btn btn-primary flex-1 justify-center" disabled={!pw || busy}>{busy ? "Waiting for passkey…" : "Set up"}</button><button type="button" className="btn" onClick={() => setAsking(false)}>Cancel</button></div>
+        </form>
+      ) : (
+        <button className="btn justify-center" onClick={() => setAsking(true)}>Unlock with Touch ID / passkey</button>
+      )}
+    </section>
+  );
+}

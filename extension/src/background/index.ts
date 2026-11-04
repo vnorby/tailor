@@ -203,6 +203,8 @@ async function handleUi(req: UiRequest): Promise<unknown> {
     case "import": await vault.create(req.password, req.mnemonic ?? "", req.privateKey); return vault.state();
     case "unlock": await vault.unlock(req.password); await broadcastAccounts(); return vault.state();
     case "lock": await vault.lock(); return vault.state();
+    case "unlockWithKey": await vault.unlockWithKey(req.key); await broadcastAccounts(); return vault.state();
+    case "exportVaultKey": return vault.exportVaultKey(req.password);
     case "addAccount": { const a = await vault.addDerived(req.name); await broadcastAccounts(); return a; }
     case "importKey": { const a = await vault.importKey(req.privateKey, req.name); await broadcastAccounts(); return a; }
     case "addWatch": return vault.addWatch(req.address, req.name);

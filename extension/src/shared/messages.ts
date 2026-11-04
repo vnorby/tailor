@@ -37,6 +37,8 @@ export type UiRequest =
   | { type: "create"; password: string; mnemonic: string }
   | { type: "import"; password: string; mnemonic?: string; privateKey?: string }
   | { type: "unlock"; password: string }
+  | { type: "unlockWithKey"; key: string }
+  | { type: "exportVaultKey"; password: string }
   | { type: "lock" }
   | { type: "addAccount"; name?: string }
   | { type: "importKey"; privateKey: string; name?: string }
