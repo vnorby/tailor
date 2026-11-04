@@ -18,11 +18,16 @@ export function CodeFrame({ html, height = 320 }: { html: string; height?: numbe
   const { open } = useActions();
   const [h, setH] = useState(height);
 
-  const srcDoc = useMemo(() => buildDoc(html, snap), [html, snap]);
+  const srcDoc = useMemo(() => buildDoc(html, snap, themeVars()), [html, snap]);
+
+  // Inside the extension, inline scripts need the manifest's sandbox page (extension pages
+  // forbid inline script, and srcdoc frames inherit that). On the web, srcdoc works as-is.
+  const inExtension = typeof location !== "undefined" && location.protocol === "chrome-extension:";
 
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       if (e.source !== ref.current?.contentWindow) return;
+      if ((e.data as { type?: string })?.type === "tailor.sandbox-ready") { ref.current?.contentWindow?.postMessage({ type: "tailor.render", doc: srcDoc }, "*"); return; }
       const m = e.data as { type?: string; positionId?: string; actionId?: string; toolId?: string; params?: Record<string, unknown>; h?: number };
       const params = m.params && typeof m.params === "object" ? Object.fromEntries(Object.entries(m.params).map(([k, v]) => [k, String(v)])) : undefined;
       if (m.type === "tailor.height" && typeof m.h === "number") setH(Math.min(1200, Math.max(60, m.h)));
@@ -38,12 +43,23 @@ export function CodeFrame({ html, height = 320 }: { html: string; height?: numbe
     };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, [snap, tools, open]);
+  }, [snap, tools, open, srcDoc]);
 
-  return <iframe ref={ref} title="Custom view" sandbox="allow-scripts" srcDoc={srcDoc} className="w-full rounded-lg bg-transparent" style={{ height: h, border: 0, colorScheme: "dark" }} />;
+  return inExtension
+    ? <iframe ref={ref} key={srcDoc.length} title="Custom view" src="sandbox.html" className="w-full rounded-lg bg-transparent" style={{ height: h, border: 0, colorScheme: "normal" }} />
+    : <iframe ref={ref} title="Custom view" sandbox="allow-scripts" srcDoc={srcDoc} className="w-full rounded-lg bg-transparent" style={{ height: h, border: 0, colorScheme: "normal" }} />;
 }
 
-function buildDoc(html: string, snap: Snapshot) {
+/** The host page's theme tokens, so generated code matches the wallet's look. */
+function themeVars(): string {
+  if (typeof document === "undefined") return "";
+  const cs = getComputedStyle(document.documentElement);
+  const names = ["--t-bg", "--t-surface", "--t-surface2", "--t-line", "--t-text", "--t-dim", "--t-faint", "--t-accent", "--t-on-accent", "--t-pos", "--t-neg", "--t-warn", "--t-radius"];
+  const vals = names.map((n) => [n, cs.getPropertyValue(n).trim()] as const).filter(([, v]) => v && /^[#\w\s.(),%-]+$/.test(v));
+  return vals.map(([n, v]) => `${n}:${v}`).join(";");
+}
+
+function buildDoc(html: string, snap: Snapshot, vars: string) {
   const data = {
     facts: globalFacts(snap),
     tokens: snap.tokens.map(({ mint, symbol, amount, priceUsd, valueUsd }) => ({ mint, symbol, amount, priceUsd, valueUsd })),
@@ -56,7 +72,7 @@ function buildDoc(html: string, snap: Snapshot) {
   const json = JSON.stringify(data).replace(/</g, "\\u003c");
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">
-<style>html,body{margin:0;background:transparent;color:#ece6d8;font:14px/1.4 ui-sans-serif,system-ui,sans-serif}*{box-sizing:border-box}</style>
+<style>:root{--t-text:#ece6d8;--t-dim:#9a958a;--t-accent:#e8c547;${vars}}html,body{margin:0;background:transparent;color:var(--t-text);font:14px/1.4 ui-sans-serif,system-ui,sans-serif}*{box-sizing:border-box}</style>
 <script>window.TAILOR=${json};window.tailor={action:function(p,a,params){parent.postMessage({type:"tailor.action",positionId:p,actionId:a,params:params||{}},"*")},tool:function(t,params){parent.postMessage({type:"tailor.tool",toolId:t,params:params||{}},"*")}};
 new ResizeObserver(function(){parent.postMessage({type:"tailor.height",h:document.documentElement.scrollHeight},"*")}).observe(document.documentElement);</script>
 </head><body>${html}</body></html>`;
