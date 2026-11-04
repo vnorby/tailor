@@ -26,13 +26,18 @@ ask bar that can answer questions, draw views, and build transactions on any pro
 
 ## Setup
 
-Requirements: Node 22+, Chrome (or another Chromium browser), an
-[Anthropic API key](https://console.anthropic.com) and a free [Helius](https://helius.dev) key.
+Requirements: Node 22+, Chrome (or another Chromium browser), and three API keys:
+
+| Key | What it's for | Cost |
+|---|---|---|
+| `ANTHROPIC_API_KEY` ([console.anthropic.com](https://console.anthropic.com)) | Claude: the agent, layout, themes, transaction explanations | Pay as you go |
+| `HELIUS_API_KEY` ([helius.dev](https://helius.dev)) | Solana RPC, balances, transaction history | Free tier is enough |
+| `JUPITER_API_KEY` ([portal.jup.ag](https://portal.jup.ag)) | Prices, token data, swap routing | Free tier is enough |
 
 ```bash
 git clone <this repo> tailor && cd tailor
 npm install
-cp .env.example .env.local      # then fill in ANTHROPIC_API_KEY and HELIUS_API_KEY
+cp .env.example .env.local      # then fill in the three keys above
 npm run extension               # builds the extension into extension/dist
 npm run dev                     # starts the server on http://127.0.0.1:3210
 ```
@@ -41,8 +46,21 @@ Then in Chrome: open `chrome://extensions`, turn on **Developer mode**, click **
 unpacked** and pick `extension/dist`. Click the Tailor icon to create or import a wallet.
 
 `npm run dev` checks your keys first and tells you what each missing one would unlock.
-Optional keys (Jupiter, tokens.xyz, Titan, DFlow, MoonPay, Postgres) are described in
-[.env.example](.env.example); everything works without them, with fewer features.
+
+Optional keys add features; everything else works without them:
+
+| Optional | Adds | Without it |
+|---|---|---|
+| `TOKENS_XYZ_API_KEY` | "Registered" checkmarks, richer stock/ETF/metal lists | Jupiter's verified list and checkmarks |
+| `TITAN_API_KEY` | Titan as an extra swap route | Jupiter + DFlow routes |
+| `DFLOW_API_KEY` | DFlow production swaps, prediction-market positions | DFlow's rate-limited test API; no DFlow positions |
+| `MOONPAY_PUBLISHABLE_KEY` + `MOONPAY_SECRET_KEY` | Buy with card | Other funding options (exchange, bridge, QR) |
+| `DATABASE_URL` | Saved layouts survive restarts | Kept in memory |
+| `SOLANA_RPC_URL` | Your own RPC for transactions | Helius |
+
+Prediction markets (Polymarket odds) and Phoenix perps need no key. Trading on Phoenix
+requires a Phoenix account activated on [app.phoenix.trade](https://app.phoenix.trade)
+(it's invite-only).
 
 After pulling changes: `npm run extension`, then click reload on Tailor in
 `chrome://extensions`.

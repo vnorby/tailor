@@ -14,10 +14,10 @@ for (const f of [".env.local", ".env"]) {
 const required = [
   ["ANTHROPIC_API_KEY", "Claude: the agent, home layout, themes, explanations (console.anthropic.com)"],
   ["HELIUS_API_KEY", "Solana RPC, token balances and history (helius.dev, free tier works)"],
+  ["JUPITER_API_KEY", "prices, token data, swaps (portal.jup.ag, free); the keyless API allows only a few requests a minute"],
 ];
 const optional = [
-  ["JUPITER_API_KEY", "higher Jupiter rate limits (falls back to the free lite-api)"],
-  ["TOKENS_XYZ_API_KEY", "tokens.xyz asset registry: tokenized stocks, verified checkmarks, curated lists"],
+  ["TOKENS_XYZ_API_KEY", "tokens.xyz registry: 'registered' checkmarks and richer stock/ETF/metal lists (falls back to Jupiter)"],
   ["TITAN_API_KEY", "Titan as an extra swap route"],
   ["DFLOW_API_KEY", "DFlow production swaps and prediction-market positions"],
   ["MOONPAY_PUBLISHABLE_KEY", "buy-with-card on-ramp (with MOONPAY_SECRET_KEY)"],

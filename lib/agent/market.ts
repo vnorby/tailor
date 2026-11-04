@@ -7,7 +7,7 @@ import { jupHeaders, jupBase } from "@/lib/core/solana";
 
 export const MARKET_TOOL = {
   name: "market_data",
-  description: "Discover and rank tokens/assets with live stats. source: 'trending' | 'top_traded' | 'top_organic' (Jupiter, verified tokens; window 1h/6h/24h), 'list' (tokens.xyz curated: list = majors | stocks | etfs | metals | rwas | currencies), or 'search' (query). Optional sort: volume | change | marketcap | liquidity. Returns mint, symbol, price, 24h change %, volume, market cap, liquidity, verified.",
+  description: "Discover and rank tokens/assets with live stats. source: 'trending' | 'top_traded' | 'top_organic' (Jupiter, verified tokens; window 1h/6h/24h), 'list' (curated: list = majors | stocks | etfs | metals | rwas | currencies | lst), or 'search' (query). Optional sort: volume | change | marketcap | liquidity. Returns mint, symbol, price, 24h change %, volume, market cap, liquidity, verified.",
   input_schema: {
     type: "object",
     properties: {
@@ -32,6 +32,23 @@ const fromTx = (a: TxAsset): Row | null => a.primaryVariant?.mint ? ({
   volume24h: a.stats?.volume24hUSD, marketCap: a.stats?.marketCap, liquidity: a.stats?.liquidity, verified: true, category: a.category,
 }) : null;
 
+// Keyless fallback for curated lists: Jupiter's verified list (~4k tokens) carries tags we can filter.
+let verified: { at: number; p: Promise<Jup[]> } | null = null;
+const verifiedList = () => {
+  if (!verified || Date.now() - verified.at > 10 * 60_000) verified = { at: Date.now(), p: get<Jup[]>(`${jupBase()}/tokens/v2/tag?query=verified`, jupHeaders()).then((l) => l ?? []) };
+  return verified.p;
+};
+const tagged = (t: Jup, tag: string) => !!t.tags?.includes(tag);
+const LISTS: Record<string, (t: Jup) => boolean> = {
+  stocks: (t) => tagged(t, "stocks"),
+  etfs: (t) => tagged(t, "stocks") && /\b(ETF|Trust|SPDR|iShares|Invesco|Vanguard|Shares)\b/i.test(t.name),
+  metals: (t) => /\b(gold|silver|platinum|palladium|copper)\b|^XAU|^XAG|^PAXG/i.test(`${t.symbol} ${t.name}`),
+  rwas: (t) => tagged(t, "rwa") && !tagged(t, "stocks"),
+  currencies: (t) => tagged(t, "stable"),
+  lst: (t) => tagged(t, "lst"),
+  majors: (t) => !tagged(t, "stocks") && !tagged(t, "rwa") && !tagged(t, "meme") && !tagged(t, "stable") && (t.mcap ?? 0) > 1e8,
+};
+
 async function get<T>(url: string, headers: Record<string, string>): Promise<T | null> {
   const r = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(8000) }).catch(() => null);
   return r?.ok ? ((await r.json()) as T) : null;
@@ -50,15 +67,19 @@ export async function marketData(input: Record<string, unknown>): Promise<string
     }
     case "list": {
       const list = String(input.list ?? "majors").replace(/[^a-z_-]/g, "");
-      const j = await get<{ assets?: TxAsset[] }>(`https://api.tokens.xyz/v1/assets/curated?list=${list}&limit=100`, tx);
+      const j = tx["x-api-key"] ? await get<{ assets?: TxAsset[] }>(`https://api.tokens.xyz/v1/assets/curated?list=${list}&limit=100`, tx) : null;
       rows = (j?.assets ?? []).map(fromTx).filter((r): r is Row => !!r);
+      if (!rows.length) { // no tokens.xyz key (or nothing there): filter Jupiter's verified list
+        const pick = LISTS[list] ?? LISTS.majors;
+        rows = (await verifiedList()).filter(pick).sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0)).map(fromJup);
+      }
       break;
     }
     case "search": {
       const q = encodeURIComponent(String(input.query ?? "").slice(0, 64));
-      const [a, b] = await Promise.all([get<{ results?: TxAsset[] }>(`https://api.tokens.xyz/v1/assets/search?q=${q}`, tx), get<Jup[]>(`${jupBase()}/tokens/v2/search?query=${q}`, jupHeaders())]);
+      const [a, b] = await Promise.all([tx["x-api-key"] ? get<{ results?: TxAsset[] }>(`https://api.tokens.xyz/v1/assets/search?q=${q}`, tx) : null, get<Jup[]>(`${jupBase()}/tokens/v2/search?query=${q}`, jupHeaders())]);
       const seen = new Set<string>();
-      rows = [...(a?.results ?? []).map(fromTx).filter((r): r is Row => !!r), ...(b ?? []).filter((t) => t.isVerified).map(fromJup)].filter((r) => !seen.has(r.mint) && !!seen.add(r.mint));
+      rows = [...(a?.results ?? []).map(fromTx).filter((r): r is Row => !!r), ...(b ?? []).filter((t) => t.isVerified || (t.liquidity ?? 0) >= 250_000).map(fromJup)].filter((r) => !seen.has(r.mint) && !!seen.add(r.mint)); // unverified only with real liquidity; the UI labels them
       break;
     }
     default: return "Unknown source.";
