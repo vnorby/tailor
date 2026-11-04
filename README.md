@@ -51,7 +51,7 @@ Optional keys add features; everything else works without them:
 
 | Optional | Adds | Without it |
 |---|---|---|
-| `TOKENS_XYZ_API_KEY` | "Registered" checkmarks, richer stock/ETF/metal lists | Jupiter's verified list and checkmarks |
+| `TOKENS_XYZ_API_KEY` ([free key](https://www.tokens.xyz/assets-api)) | "Registered" checkmarks, richer stock/ETF/metal lists | Jupiter's verified list and checkmarks |
 | `TITAN_API_KEY` | Titan as an extra swap route | Jupiter + DFlow routes |
 | `DFLOW_API_KEY` | DFlow production swaps, prediction-market positions | DFlow's rate-limited test API; no DFlow positions |
 | `MOONPAY_PUBLISHABLE_KEY` + `MOONPAY_SECRET_KEY` | Buy with card | Other funding options (exchange, bridge, QR) |

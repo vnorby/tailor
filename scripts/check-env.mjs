@@ -17,7 +17,7 @@ const required = [
   ["JUPITER_API_KEY", "prices, token data, swaps (portal.jup.ag, free); the keyless API allows only a few requests a minute"],
 ];
 const optional = [
-  ["TOKENS_XYZ_API_KEY", "tokens.xyz registry: 'registered' checkmarks and richer stock/ETF/metal lists (falls back to Jupiter)"],
+  ["TOKENS_XYZ_API_KEY", "tokens.xyz registry: 'registered' checkmarks and richer stock/ETF/metal lists (free key: tokens.xyz/assets-api; falls back to Jupiter)"],
   ["TITAN_API_KEY", "Titan as an extra swap route"],
   ["DFLOW_API_KEY", "DFlow production swaps and prediction-market positions"],
   ["MOONPAY_PUBLISHABLE_KEY", "buy-with-card on-ramp (with MOONPAY_SECRET_KEY)"],
