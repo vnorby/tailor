@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.4.0",
+    "@coral-xyz/anchor": "^0.30.1",
     "@drift-labs/sdk": "^2.163.0-beta.13",
     "@ellipsis-labs/rise": "^0.7.4",
     "@kamino-finance/klend-sdk": "^13.0.6",

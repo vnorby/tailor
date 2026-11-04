@@ -3,6 +3,7 @@ import { call, type PendingRequest } from "~/shared/messages";
 import { BalanceChanges, type Preview } from "@/components/BalanceChanges";
 import { Globe } from "@phosphor-icons/react";
 import { Logo, mount, short, Unlock, useWalletState } from "../common";
+import { MaliciousInterstitial, SiteBanner, useDomainCheck } from "../security/SiteCheck";
 
 const VERB: Record<PendingRequest["method"], string> = {
   connect: "wants to connect",
@@ -19,6 +20,8 @@ function Approve() {
   const [err, setErr] = useState<string | null>(null);
   const [previews, setPreviews] = useState<(Preview | null | "loading")[]>([]);
   const [busy, setBusy] = useState(false);
+  const site = useDomainCheck(state?.apiBase, req?.origin);
+  const [acknowledged, setAcknowledged] = useState(false);
 
   useEffect(() => { call<PendingRequest>({ type: "getPending", id }).then(setReq).catch((e) => setErr(e.message)); }, [id]);
 
@@ -44,7 +47,9 @@ function Approve() {
   if (!req || !state) return <Shell><p className="text-dim text-[14px]">Loading…</p></Shell>;
 
   const host = (() => { try { return new URL(req.origin).host; } catch { return req.origin; } })();
-  const risky = req.warnings.length > 0 || previews.some((p) => p && p !== "loading" && (!p.ok || p.warnings.length > 0)) || (isTx && previews.some((p) => p === null));
+  const malicious = site !== "loading" && site?.verdict === "malicious";
+  if (malicious && !acknowledged) return <MaliciousInterstitial host={host} reasons={site.reasons} onReject={() => void decide(false)} onContinue={() => setAcknowledged(true)} />;
+  const risky = (site !== "loading" && site !== null && site.verdict !== "ok") || req.warnings.length > 0 || previews.some((p) => p && p !== "loading" && (!p.ok || p.warnings.length > 0)) || (isTx && previews.some((p) => p === null));
 
   return (
     <Shell>
@@ -58,6 +63,7 @@ function Approve() {
       </div>
       {req.account && <div className="text-[12px] text-faint">Account <span className="num text-dim">{short(req.account)}</span></div>}
 
+      <SiteBanner check={site} />
       {req.warnings.map((w) => <p key={w} className="rounded-lg bg-danger/12 text-danger px-3 py-2 text-[13px]">⚠ {w}</p>)}
 
       {!state.unlocked ? (
@@ -82,7 +88,7 @@ function Approve() {
           )}
           <div className="mt-auto grid grid-cols-2 gap-2 pt-2">
             <button className="btn justify-center !py-2.5" disabled={busy} onClick={() => decide(false)}>Reject</button>
-            <button className={`btn justify-center !py-2.5 ${risky ? "btn-danger" : "btn-primary"}`} disabled={busy || previews.some((p) => p === "loading")} onClick={() => decide(true)}>
+            <button className={`btn justify-center !py-2.5 ${risky ? "btn-danger" : "btn-primary"}`} disabled={busy || site === "loading" || (malicious && !acknowledged) || previews.some((p) => p === "loading")} onClick={() => decide(true)}>
               {busy ? "…" : req.method === "connect" ? "Connect" : risky ? "Approve anyway" : "Approve"}
             </button>
           </div>

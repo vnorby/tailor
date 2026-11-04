@@ -24,6 +24,8 @@ export interface Preview {
   accountsTouched: number;
   programs: { id: string; name?: string }[];
   warnings: string[];
+  /** Subset of `warnings` that are severe enough to stop and think (durable nonce, ownership changes…). */
+  critical: string[];
   unitsConsumed?: number;
 }
 
@@ -36,6 +38,9 @@ const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
 const SOL_ICON = "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png";
 const U64_MAX = BigInt("18446744073709551615");
 const SIM_ADDR_LIMIT = 64;
+/** More owner accounts than this handed (writable) to unknown programs triggers an aggregate warning. */
+const UNKNOWN_WRITABLE_LIMIT = 3;
+const NONCE_WARNING = "Uses a durable nonce, so this transaction never expires: whoever holds the signed copy can submit it days or months from now. This is the classic \"sign now, drain later\" trick. Only approve if you started this yourself in an app you trust.";
 
 export const KNOWN_PROGRAMS: Record<string, string> = {
   [SYSTEM]: "System Program",
@@ -262,9 +267,16 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
   const pendingWarnings: Pending[] = [];
   let sawApprove = false;
   let sawOwnerChange = false;
-  const addW = (w: string | Pending) => (typeof w === "string" ? pendingWarnings.push(() => w) : pendingWarnings.push(w));
+  const critical = new Set<string>();
+  const addW = (w: string | Pending, severe = false) => pendingWarnings.push((meta) => {
+    const text = typeof w === "string" ? w : w(meta);
+    if (severe) critical.add(text);
+    return text;
+  });
+  const crit = (w: string) => { critical.add(w); warnings.push(w); };
+  const unknownWritable = new Set<string>();
 
-  for (const ix of ixs) {
+  ixs.forEach((ix, ixIndex) => {
     programIds.add(ix.programId);
     const d = ix.data;
     const a = ix.accounts;
@@ -290,7 +302,7 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
           const type = d[1];
           const hasNew = d[2] === 1;
           const newAuth = hasNew ? new PublicKey(d.slice(3, 35)).toBase58() : undefined;
-          if (type === 2) { sawOwnerChange = true; addW(`Transfers ownership/authority of a token account${newAuth ? ` to ${short(newAuth)}` : ""}.`); }
+          if (type === 2) { sawOwnerChange = true; addW(`Transfers ownership/authority of a token account${newAuth ? ` to ${short(newAuth)}` : ""}.`, true); }
           else if (type === 3) addW(`Sets close authority on a token account${newAuth ? ` to ${short(newAuth)}` : " (removed)"}.`);
           else if (type === 0 || type === 1) addW(`Changes the ${type === 0 ? "mint" : "freeze"} authority of a token mint${newAuth ? ` to ${short(newAuth)}` : " (revoked)"}.`);
           else addW("Changes an authority on a token account or mint.");
@@ -309,21 +321,32 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
       const tag = d.length >= 4 ? u32(d, 0) : -1;
       if ((tag === 1 || tag === 10) && a[0] === owner) { // Assign / AssignWithSeed
         const newOwner = tag === 1 ? new PublicKey(d.slice(4, 36)).toBase58() : undefined;
-        addW(`Assigns your account to another program${newOwner ? ` (${KNOWN_PROGRAMS[newOwner] ?? short(newOwner)})` : ""} — it could take control of your SOL.`);
+        addW(`Assigns your account to another program${newOwner ? ` (${KNOWN_PROGRAMS[newOwner] ?? short(newOwner)})` : ""} — it could take control of your SOL.`, true);
+      } else if (tag === 4) { // AdvanceNonceAccount: [nonce account, RecentBlockhashes sysvar, nonce authority]
+        // The runtime only honours it as the first instruction; anywhere else it's still a red flag.
+        addW(ixIndex === 0 ? NONCE_WARNING : `${NONCE_WARNING} (The nonce instruction isn't first, so it may also just fail.)`, true);
+        if (a[2] && a[2] !== owner) addW(`The durable nonce is controlled by ${short(a[2])}, not this wallet.`);
+      } else if (tag === 7 && a[1] === owner) { // AuthorizeNonceAccount
+        const newAuth = d.length >= 36 ? new PublicKey(d.slice(4, 36)).toBase58() : undefined;
+        addW(`Hands control of one of your durable nonce accounts${newAuth ? ` to ${short(newAuth)}` : ""}.`, true);
       }
     } else if (!KNOWN_PROGRAMS[ix.programId]) {
       const handsOwner = a.some((k, i) => ix.writable[i] && isOwnerAcct(k));
+      a.forEach((k, i) => { if (ix.writable[i] && isOwnerAcct(k)) unknownWritable.add(k); });
       addW(handsOwner
         ? `Gives write access to your ${a.some((k, i) => ix.writable[i] && k === owner) ? "wallet" : "token account"} to an unknown program (${short(ix.programId)}).`
         : `Calls an unknown program (${short(ix.programId)}).`);
     }
+  });
+  if (unknownWritable.size > UNKNOWN_WRITABLE_LIMIT) {
+    addW(`Gives unknown programs write access to ${unknownWritable.size} of your accounts at once — typical of wallet drainers sweeping every token.`, true);
   }
   if (feePayer !== owner) warnings.push(`The network fee is paid by ${short(feePayer)}, not this wallet.`);
   if (!allKeys.slice(0, msg.header.numRequiredSignatures).includes(owner)) warnings.push("This wallet isn't a required signer of this transaction.");
 
   // ---- simulate ----
   type SimAcct = RpcAccount | null;
-  type InnerIx = { programIdIndex?: number; programId?: string };
+  type InnerIx = { programIdIndex?: number; programId?: string; program?: string; parsed?: { type?: string; info?: Record<string, unknown> } };
   let sim: { err: unknown; logs?: string[]; unitsConsumed?: number; accounts?: SimAcct[] | null; innerInstructions?: { instructions: InnerIx[] }[] | null };
   try {
     const r = await rpc<{ value: typeof sim }>("simulateTransaction", [base64Tx, {
@@ -337,6 +360,26 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
   for (const g of sim.innerInstructions ?? []) for (const ii of g.instructions) {
     const id = ii.programId ?? (ii.programIdIndex != null ? allKeys[ii.programIdIndex] : undefined);
     if (id) programIds.add(id);
+    // CPI-level risky instructions (the RPC returns inner instructions jsonParsed).
+    const t = ii.parsed?.type; const info = ii.parsed?.info ?? {};
+    const str = (k: string) => (typeof info[k] === "string" ? (info[k] as string) : undefined);
+    if (!t) continue;
+    if ((id === TOKEN || id === TOKEN_2022) && t === "setAuthority") {
+      const acct = str("account") ?? str("mint"); const auth = str("authority") ?? str("multisigAuthority");
+      if (auth !== owner && !(acct && isOwnerAcct(acct))) continue;
+      const kind = str("authorityType"); const to = str("newAuthority");
+      if (kind === "accountOwner") { sawOwnerChange = true; crit(`A program called by this transaction transfers ownership of one of your token accounts${to ? ` to ${short(to)}` : ""}.`); }
+      else if (kind === "closeAccount") crit(`A program called by this transaction sets the close authority of one of your token accounts${to ? ` to ${short(to)}` : ""}.`);
+      else warnings.push(`A program called by this transaction changes the ${kind ?? "authority"} of a token account or mint you control.`);
+    } else if ((id === TOKEN || id === TOKEN_2022) && t === "closeAccount") {
+      const acct = str("account"); const dest = str("destination"); const auth = str("owner") ?? str("multisigOwner");
+      if ((auth === owner || (acct && isOwnerAcct(acct))) && dest && dest !== owner) crit(`A program called by this transaction closes one of your token accounts and sends its rent to ${short(dest)}.`);
+    } else if (id === SYSTEM && (t === "assign" || t === "assignWithSeed") && str("account") === owner) {
+      const to = str("owner");
+      crit(`A program called by this transaction assigns your wallet to ${to ? KNOWN_PROGRAMS[to] ?? short(to) : "another program"} — it could take control of your SOL.`);
+    } else if (id === SYSTEM && t === "authorizeNonce" && str("nonceAuthority") === owner) {
+      crit(`A program called by this transaction hands control of your durable nonce account to ${short(str("newAuthorized") ?? "another wallet")}.`);
+    }
   }
 
   // ---- diff ----
@@ -369,7 +412,7 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
         if (preOwned) bump(tPre!.mint, -preAmt, tPre!.tokenAmount.decimals);
         if (postOwned) bump(tPost!.mint, postAmt, tPost!.tokenAmount.decimals);
       }
-      if (preOwned && tPost && !postOwned && !sawOwnerChange) warnings.push("Transfers ownership of one of your token accounts to another wallet.");
+      if (preOwned && tPost && !postOwned && !sawOwnerChange) crit("Transfers ownership of one of your token accounts to another wallet.");
       if (postOwned && tPost?.delegate && tPost.delegate !== tPre?.delegate) {
         // Top-level approves are decoded above; this catches CPI-driven ones.
         if (!sawApprove) warnings.push(`Approves a delegate (${short(tPost.delegate)}) to spend from one of your token accounts.`);
@@ -394,6 +437,8 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
   if (!sim.err && preSol > 0 && -solDeltaLamports > preSol * 0.5) {
     warnings.push(`Sends out ${((-solDeltaLamports / preSol) * 100).toFixed(0)}% of your SOL balance.`);
   }
+  // Severe warnings first so they're the first thing the user reads.
+  const ordered = [...new Set([...warnings.filter((w) => critical.has(w)), ...warnings.filter((w) => !critical.has(w))])];
 
   return {
     ok: !sim.err,
@@ -402,7 +447,8 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
     changes,
     accountsTouched: allKeys.length,
     programs: [...programIds].map((id) => ({ id, ...(KNOWN_PROGRAMS[id] ? { name: KNOWN_PROGRAMS[id] } : {}) })),
-    warnings: [...new Set(warnings)],
+    warnings: ordered,
+    critical: ordered.filter((w) => critical.has(w)),
     ...(sim.unitsConsumed != null ? { unitsConsumed: sim.unitsConsumed } : {}),
   };
 }

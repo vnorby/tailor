@@ -1,8 +1,22 @@
-import { useEffect, useState } from "react";
-import { GearSix, LockSimple, SidebarSimple } from "@phosphor-icons/react";
+import { useEffect, useRef, useState } from "react";
+import { Copy, GearSix, LockSimple, SidebarSimple } from "@phosphor-icons/react";
 import { Home } from "../home/Home";
 import { call, type WalletState } from "~/shared/messages";
 import { AccountSwitcher, Logo, mount, short, Unlock, useWalletState } from "../common";
+import { Checkup } from "../security/Checkup";
+
+const CLIPBOARD_CLEAR_MS = 60_000;
+
+/**
+ * Clear the clipboard if it still holds `secret`. Reading the clipboard needs focus (and,
+ * outside a user gesture, the clipboardRead permission); if we can't read it we clear it
+ * anyway — wiping something the user copied later is better than leaving a seed phrase there.
+ */
+async function clearClipboardIf(secret: string) {
+  let current: string | null = null;
+  try { current = await navigator.clipboard.readText(); } catch { /* unreadable */ }
+  if (current === null || current === secret) await navigator.clipboard.writeText("").catch(() => {});
+}
 
 
 function Popup() {
@@ -45,7 +59,25 @@ function Settings({ state, activeId, onBack, refresh }: { state: WalletState; ac
   const [revealWhat, setRevealWhat] = useState<null | "mnemonic" | "privateKey">(null);
   const [pw, setPw] = useState(""); const [secret, setSecret] = useState<string | null>(null); const [err, setErr] = useState<string | null>(null);
   const [api, setApi] = useState(state.apiBase);
+  const [copied, setCopied] = useState(false);
+  const copiedSecret = useRef<string | null>(null);
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { call<{ origin: string }[]>({ type: "connectedSites" }).then(setSites).catch(() => {}); }, []);
+  // Leaving Settings (or the popup re-rendering it away) clears a copied secret right away.
+  useEffect(() => () => { if (clearTimer.current) clearTimeout(clearTimer.current); if (copiedSecret.current) void clearClipboardIf(copiedSecret.current); }, []);
+  const copySecret = async (value: string) => {
+    await navigator.clipboard.writeText(value);
+    copiedSecret.current = value; setCopied(true);
+    if (clearTimer.current) clearTimeout(clearTimer.current);
+    clearTimer.current = setTimeout(() => { void clearClipboardIf(value); copiedSecret.current = null; setCopied(false); }, CLIPBOARD_CLEAR_MS);
+  };
+  const hideSecret = () => {
+    if (copiedSecret.current) void clearClipboardIf(copiedSecret.current);
+    if (clearTimer.current) clearTimeout(clearTimer.current);
+    copiedSecret.current = null; setCopied(false);
+    setSecret(null); setRevealWhat(null); setPw("");
+  };
+  const active = state.accounts.find((a) => a.id === activeId);
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-5 text-[13px]">
       <button className="text-left text-dim hover:text-chalk" onClick={onBack}>← Back</button>
@@ -57,6 +89,12 @@ function Settings({ state, activeId, onBack, refresh }: { state: WalletState; ac
             <button className="btn !py-1 !px-2 text-[12px]" onClick={async () => { await call({ type: "disconnectSite", origin: s.origin }); setSites((x) => x.filter((y) => y.origin !== s.origin)); }}>Disconnect</button></div>
         ))}
       </section>
+      {active && (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-[11px] uppercase tracking-[0.12em] text-faint">Security checkup</h3>
+          <Checkup state={state} active={active} />
+        </section>
+      )}
       <section className="flex flex-col gap-2">
         <h3 className="text-[11px] uppercase tracking-[0.12em] text-faint">Look</h3>
         <button className="btn justify-center" onClick={() => chrome.tabs.create({ url: "onboarding.html" })}>Restyle wallet</button>
@@ -72,7 +110,13 @@ function Settings({ state, activeId, onBack, refresh }: { state: WalletState; ac
         {!revealWhat ? (
           <div className="flex gap-2"><button className="btn flex-1 justify-center" onClick={() => setRevealWhat("mnemonic")}>Show recovery phrase</button><button className="btn flex-1 justify-center" onClick={() => setRevealWhat("privateKey")}>Export private key</button></div>
         ) : secret ? (
-          <div className="flex flex-col gap-2"><p className="text-warn text-[12px]">Never share this. Anyone with it controls your funds.</p><pre className="card p-3 num text-[12px] whitespace-pre-wrap break-all">{secret}</pre><button className="btn justify-center" onClick={() => { setSecret(null); setRevealWhat(null); setPw(""); }}>Hide</button></div>
+          <div className="flex flex-col gap-2"><p className="text-warn text-[12px]">Never share this. Anyone with it controls your funds.</p><pre className="card p-3 num text-[12px] whitespace-pre-wrap break-all">{secret}</pre>
+            <div className="flex gap-2">
+              <button className="btn flex-1 justify-center" onClick={() => void copySecret(secret).catch((x) => setErr(x instanceof Error ? x.message : String(x)))}><Copy size={14} weight="bold" />{copied ? "Copied" : "Copy"}</button>
+              <button className="btn flex-1 justify-center" onClick={hideSecret}>Hide</button>
+            </div>
+            {copied && <p className="text-faint text-[11.5px]">Copied. The clipboard is cleared in 60 seconds, or when you hide this. Keep this popup open until then.</p>}
+          </div>
         ) : (
           <form className="flex flex-col gap-2" onSubmit={async (e) => { e.preventDefault(); setErr(null); try { setSecret(await call<string>({ type: "reveal", password: pw, what: revealWhat, id: activeId })); } catch (x) { setErr(x instanceof Error ? x.message : String(x)); } }}>
             <input className="input" type="password" autoFocus placeholder="Enter your password" value={pw} onChange={(e) => setPw(e.target.value)} />

@@ -7,11 +7,22 @@ export interface Preview {
   changes: { mint: string; symbol: string; name?: string; icon?: string; decimals: number; delta: number; usd?: number }[];
   programs: { id: string; name?: string }[];
   warnings: string[];
+  /** Subset of warnings that are severe (durable nonce, ownership change…); shown in red. Optional for older servers. */
+  critical?: string[];
 }
 
 /** Simulated effect of a transaction on the wallet: what goes out, what comes in. */
 export function BalanceChanges({ preview, compact }: { preview: Preview; compact?: boolean }) {
-  if (!preview.ok) return <p className="text-[13px] text-danger">{/^simulation failed/i.test(preview.error ?? "") ? preview.error : `Simulation failed: ${preview.error}`}</p>;
+  const warnings = preview.warnings.map((w) => preview.critical?.includes(w)
+    ? <p key={w} className="rounded-lg bg-danger/12 text-danger px-2.5 py-2 text-[12.5px] font-medium">⛔ {w}</p>
+    : <p key={w} className="text-[12.5px] text-warn">⚠ {w}</p>);
+  if (!preview.ok) return (
+    <div className="flex flex-col gap-2">
+      <p className="text-[13px] text-danger">{/^simulation failed/i.test(preview.error ?? "") ? preview.error : `Simulation failed: ${preview.error}`}</p>
+      {/* Static checks (durable nonce, authority changes…) still apply when simulation fails. */}
+      {warnings}
+    </div>
+  );
   const rows = preview.changes.filter((c) => Math.abs(c.delta) > 0);
   return (
     <div className="rounded-xl border border-line bg-cloth/60 p-3 flex flex-col gap-2">
@@ -27,7 +38,7 @@ export function BalanceChanges({ preview, compact }: { preview: Preview; compact
         </div>
       ))}
       <div className="flex justify-between text-[12px] text-faint"><span>Network fee</span><span className="num">{(preview.feeLamports / 1e9).toFixed(6)} SOL</span></div>
-      {preview.warnings.map((w) => <p key={w} className="text-[12.5px] text-warn">⚠ {w}</p>)}
+      {warnings}
     </div>
   );
 }

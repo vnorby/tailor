@@ -19,9 +19,10 @@ export interface Executor {
 
 type Target =
   | { kind: "action"; position: Position; action: Action; params?: Record<string, string> }
-  | { kind: "tool"; tool: ToolDef; params: Record<string, string>; form?: boolean };
+  | { kind: "tool"; tool: ToolDef; params: Record<string, string>; form?: boolean }
+  | { kind: "prepared"; prep: Prepared; title?: string };
 
-interface Prepared { txs: string[]; summary: string; warnings?: string[]; simulations: { ok: boolean; error?: string }[]; preview?: Preview | null }
+export interface Prepared { txs: string[]; summary: string; warnings?: string[]; simulations: { ok: boolean; error?: string }[]; preview?: Preview | null }
 
 type Stage =
   | { s: "form" }
@@ -44,30 +45,39 @@ export function ActionProvider({ executor, onDone, children }: { executor: Execu
   return (
     <Ctx.Provider value={{ open }}>
       {children}
-      {target && <Sheet key={JSON.stringify(target.kind === "action" ? [target.position.id, target.action.id] : target.tool.id)} ex={executor} target={target} onClose={(changed) => { setTarget(null); if (changed) onDone(); }} />}
+      {target && <Sheet key={JSON.stringify(target.kind === "action" ? [target.position.id, target.action.id] : target.kind === "tool" ? target.tool.id : target.prep.txs[0]?.slice(0, 32))} ex={executor} target={target} onClose={(changed) => { setTarget(null); if (changed) onDone(); }} />}
     </Ctx.Provider>
   );
 }
 
 function fieldsOf(t: Target): ActionField[] {
-  return t.kind === "action" ? t.action.fields ?? [] : t.tool.fields;
+  return t.kind === "action" ? t.action.fields ?? [] : t.kind === "tool" ? t.tool.fields : [];
 }
 
 function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(changed: boolean): void }) {
   const owner = ex.owner;
   const fields = fieldsOf(target);
+  const given = target.kind === "prepared" ? undefined : target.params;
   const [params, setParams] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    for (const f of fields) init[f.name] = target.params?.[f.name] ?? f.default ?? "";
+    for (const f of fields) init[f.name] = given?.[f.name] ?? f.default ?? "";
     return init;
   });
   // Tools and what-if sliders arrive with their inputs already chosen, so build straight away.
-  const direct = !fields.length || (target.kind === "tool" && !target.form) || (!!target.params && fields.every((f) => target.params?.[f.name] != null || f.default != null));
-  const [stage, setStage] = useState<Stage>({ s: direct ? "preparing" : "form" });
-  const label = target.kind === "action" ? target.action.label : target.tool.label;
+  const direct = !fields.length || (target.kind === "tool" && !target.form) || (!!given && fields.every((f) => given?.[f.name] != null || f.default != null));
+  const [stage, setStage] = useState<Stage>(target.kind === "prepared" ? { s: "review", prep: target.prep } : { s: direct ? "preparing" : "form" });
+  const label = target.kind === "action" ? target.action.label : target.kind === "tool" ? target.tool.label : target.title ?? "Review";
   const danger = target.kind === "action" && target.action.danger;
 
+  const preview = useCallback((prep: Prepared) => {
+    // Exact balance changes for the first tx; later txs depend on it landing.
+    fetch(`${ex.apiBase}/api/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx: prep.txs[0], owner }) })
+      .then((x) => (x.ok ? x.json() : null)).catch(() => null)
+      .then((p) => setStage((st) => (st.s === "review" && st.prep === prep ? { s: "review", prep: { ...prep, preview: p } } : st)));
+  }, [ex.apiBase, owner]);
+
   const prepare = useCallback(async () => {
+    if (target.kind === "prepared") return;
     setStage({ s: "preparing" });
     try {
       const r = await fetch(`${ex.apiBase}${target.kind === "action" ? "/api/action" : "/api/tool"}`, {
@@ -80,16 +90,14 @@ function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(
       if (!r.ok) throw new Error(j.error ?? `Request failed (${r.status})`);
       const prep = j as Prepared;
       setStage({ s: "review", prep });
-      // Exact balance changes for the first tx; later txs depend on it landing.
-      fetch(`${ex.apiBase}/api/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx: prep.txs[0], owner }) })
-        .then((x) => (x.ok ? x.json() : null)).catch(() => null)
-        .then((preview) => setStage((st) => (st.s === "review" && st.prep === prep ? { s: "review", prep: { ...prep, preview } } : st)));
+      preview(prep);
     } catch (e) { setStage({ s: "error", message: e instanceof Error ? e.message : String(e) }); }
-  }, [ex.apiBase, owner, params, target]);
+  }, [ex.apiBase, owner, params, target, preview]);
 
   // Actions without inputs go straight to preparing.
   useEffect(() => {
-    if (direct) void prepare();
+    if (target.kind === "prepared") preview(target.prep);
+    else if (direct) void prepare();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -120,7 +128,7 @@ function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(
       <div className="card w-full sm:max-w-md p-5 rounded-b-none sm:rounded-b-[14px] rise" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.12em] text-dim">{target.kind === "action" ? target.position.title : "Tool"}</p>
+            <p className="text-[11px] uppercase tracking-[0.12em] text-dim">{target.kind === "action" ? target.position.title : target.kind === "tool" ? "Tool" : "Built by Tailor"}</p>
             <h2 className="font-serif text-[28px] leading-none mt-1">{label}</h2>
           </div>
           <button className="text-dim hover:text-chalk text-xl leading-none" onClick={() => onClose(changed)} aria-label="Close">×</button>
@@ -170,7 +178,7 @@ function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(
           <div className="flex flex-col gap-2">
             <p className="text-danger text-[14px] break-words">{stage.message}</p>
             {stage.sigs?.map((s) => <a key={s} className="num text-[12px] text-dim" href={`https://solscan.io/tx/${s}`} target="_blank" rel="noreferrer">Landed: {short(s)} ↗</a>)}
-            <button className="btn justify-center mt-2" onClick={() => setStage({ s: "form" })}>Back</button>
+            {target.kind !== "prepared" && <button className="btn justify-center mt-2" onClick={() => setStage({ s: "form" })}>Back</button>}
           </div>
         )}
       </div>

@@ -64,15 +64,66 @@ interface DasAsset {
   token_info?: { balance?: number; decimals?: number; symbol?: string; price_info?: { price_per_token?: number; total_price?: number } };
 }
 
-/** Fungible balances incl. native SOL, priced; dust (< $0.01 and unpriced zero) dropped. */
-export async function walletTokens(owner: string): Promise<Token[]> {
+/**
+ * Fungible balances incl. native SOL, priced; dust (< $0.01 and unpriced zero) dropped.
+ * Likely spam (airdrop-scam names, or unpriced + not Jupiter-verified) is hidden and never
+ * counts toward totals. With `includeSpam`, spam is appended at the end flagged
+ * `spam: true` with `valueUsd: 0` so callers summing values are unaffected.
+ */
+export async function walletTokens(owner: string, opts: { includeSpam?: boolean } = {}): Promise<Token[]> {
   const tokens = await dasTokens(owner).catch(() => rpcTokens(owner));
   const px = await prices(tokens.map((t) => t.mint));
   for (const t of tokens) {
     t.priceUsd = px[t.mint] ?? t.priceUsd;
     if (t.priceUsd != null) t.valueUsd = t.amount * t.priceUsd;
   }
-  return tokens.filter((t) => (t.valueUsd ?? 0) >= 0.01).sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
+  const scamNamed = tokens.filter((t) => t.mint !== SOL_MINT && (looksLikeScamToken(t) || clonesMajor(t)));
+  const unpriced = opts.includeSpam ? tokens.filter((t) => t.mint !== SOL_MINT && t.priceUsd == null) : [];
+  const verified = await jupVerified([...scamNamed, ...unpriced].map((t) => t.mint));
+  const isSpam = (t: Token) => t.mint !== SOL_MINT && !verified.has(t.mint) && (looksLikeScamToken(t) || clonesMajor(t) || t.priceUsd == null);
+  const visible = tokens.filter((t) => !isSpam(t) && (t.valueUsd ?? 0) >= 0.01).sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
+  if (!opts.includeSpam) return visible;
+  const spam = tokens.filter(isSpam).slice(0, 100).map((t) => ({ ...t, priceUsd: undefined, valueUsd: 0, spam: true }));
+  return [...visible, ...spam];
+}
+
+// ---------- spam heuristics ----------
+
+/** Airdrop-scam token names: "Claim your reward at xyz.com", "$500 USDC voucher", t.me links… */
+const SCAM_TOKEN = /(claim|airdrop|reward|voucher|giveaway|redeem|eligible|bonus|visit\b|free\s|gift|\$\s?\d|https?:|www\.|t\.me\/|\.(com|io|xyz|net|org|app|fun|site|top|click|online|live|gg|me|cc|pro|vip|link|claims?|events?)(\b|$))/i;
+/** Exposed for other spam checks: a token whose name or symbol reads like an airdrop-scam ad. */
+export const looksLikeScamToken = (t: { name?: string; symbol?: string }) => SCAM_TOKEN.test(`${t.symbol ?? ""} ${t.name ?? ""}`);
+/** Symbols scammers clone with worthless mints; real ones are Jupiter-verified. */
+const CLONED_SYMBOLS = new Set(["SOL", "WSOL", "USDC", "USDT", "JUP", "BONK", "WIF", "JTO", "PYTH", "RAY", "MSOL", "JITOSOL", "ETH", "BTC", "WBTC", "TRUMP"]);
+const clonesMajor = (t: Token) => t.mint !== SOL_MINT && t.mint !== USDC_MINT && CLONED_SYMBOLS.has(t.symbol.trim().toUpperCase());
+
+const verifiedCache = new Map<string, { v: boolean; at: number }>();
+const VERIFIED_TTL = 6 * 60 * 60_000;
+
+/** Mints Jupiter marks verified (isVerified or a verified/strict tag). Best-effort: errors → not verified. */
+export async function jupVerified(mints: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  const need: string[] = [];
+  for (const m of new Set(mints)) {
+    const c = verifiedCache.get(m);
+    if (c && Date.now() - c.at < VERIFIED_TTL) { if (c.v) out.add(m); } else need.push(m);
+  }
+  for (let i = 0; i < need.length && i < 300; i += 100) {
+    const chunk = need.slice(i, i + 100);
+    try {
+      const r = await fetch(`https://api.jup.ag/tokens/v2/search?query=${chunk.join(",")}`, { headers: jupHeaders(), cache: "no-store", signal: AbortSignal.timeout(5000) });
+      if (!r.ok) continue;
+      const seen = new Set<string>();
+      for (const m of (await r.json()) as { id: string; isVerified?: boolean; tags?: string[] }[]) {
+        const v = !!m.isVerified || !!m.tags?.some((t) => t === "verified" || t === "strict");
+        seen.add(m.id);
+        verifiedCache.set(m.id, { v, at: Date.now() });
+        if (v) out.add(m.id);
+      }
+      for (const m of chunk) if (!seen.has(m)) verifiedCache.set(m, { v: false, at: Date.now() });
+    } catch { /* treat as unverified */ }
+  }
+  return out;
 }
 
 const SOL_ICON = "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png";

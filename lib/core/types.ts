@@ -88,6 +88,7 @@ export interface Token {
   decimals: number;
   priceUsd?: number;
   valueUsd?: number;
+  spam?: boolean;          // likely airdrop/scam token (only returned when explicitly requested)
 }
 
 export interface Ctx {

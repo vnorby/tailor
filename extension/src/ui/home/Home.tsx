@@ -85,7 +85,14 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
   const defiUsd = snap ? snap.netWorthUsd - walletUsd : 0;
   const detailPos = detail && snap ? snap.positions.find((p) => p.id === detail) : undefined;
 
-  const ask = (t: string) => { setPrompt(""); void h.run({ prompt: t }); };
+  const ask = (t: string) => { setPrompt(""); void h.ask(t); };
+
+  // A transaction the agent built opens straight into review (simulation + balance changes).
+  useEffect(() => {
+    if (!h.proposal) return;
+    const prep = h.proposal; h.clearProposal();
+    open({ kind: "prepared", prep, title: "Review" });
+  }, [h.proposal, h, open]);
 
   return (
     <div className={`flex flex-col ${compact ? "h-[600px] w-[360px] overflow-hidden" : "min-h-screen"}`}>
@@ -130,6 +137,7 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
 
         {snap && (
           <GenProvider snap={snap} tools={h.tools}>
+            {h.answer && <AnswerPanel a={h.answer} onClose={h.clearAnswer} snapReady />}
             <div className="mt-2">
               {!empty && h.sections.map((s, i) => <SectionView key={`${i}-${s.kind}`} s={s} positions={snap.positions} tokens={snap.tokens} tools={h.tools} onOpen={setDetail} />)}
             </div>
@@ -151,7 +159,7 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
 
       {/* Ask bar */}
       <div className={`${compact ? "absolute" : "fixed"} inset-x-0 bottom-0 z-30 px-3 pb-3 pt-6 bg-gradient-to-t from-cloth via-cloth/95 to-transparent`}>
-        {h.reply && !h.working && <p className="mb-2 text-[12.5px] bg-panel border border-line rounded-[calc(var(--t-radius)*.8)] px-3 py-2 rise" onClick={() => h.setReply(null)}>{h.reply}</p>}
+
         <form className="flex gap-2 card !rounded-full p-1 pl-4" onSubmit={(e) => { e.preventDefault(); if (prompt.trim()) ask(prompt.trim()); }}>
           <input className="flex-1 min-w-0 bg-transparent text-[14px] outline-none placeholder:text-faint" placeholder={h.working ? "Tailoring…" : "Ask Tailor anything…"} value={prompt} onChange={(e) => setPrompt(e.target.value)} disabled={!snap || h.working} />
           <button className="btn btn-primary !rounded-full !px-4" disabled={!snap || h.working || !prompt.trim()}>Go</button>
@@ -161,6 +169,22 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
       {receive && <Sheet onClose={() => setReceive(false)}><Receive address={address} /></Sheet>}
       {fund && <Sheet onClose={() => setFund(false)}><div className="pb-4"><Funding address={address} apiBase={apiBase} compact /></div></Sheet>}
     </div>
+  );
+}
+
+/** The agent's answer: streamed text plus any cards it drew. */
+function AnswerPanel({ a, onClose, snapReady }: { a: import("./useHome").Answer; onClose(): void; snapReady: boolean }) {
+  return (
+    <section className="mx-4 mt-4 card p-3.5 rise">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[12px] text-faint truncate">{a.prompt}</p>
+        {a.done && <button className="text-faint hover:text-chalk" aria-label="Dismiss" onClick={onClose}><X size={14} weight="bold" /></button>}
+      </div>
+      {a.text && <p className={`mt-1.5 text-[14px] leading-snug whitespace-pre-wrap ${a.done ? "" : "caret"}`}>{a.text}</p>}
+      {!a.text && !a.done && <p className="mt-1.5 text-[14px] text-dim caret">Working on it</p>}
+      {a.error && <p className="mt-1.5 text-[13px] text-danger">{a.error}</p>}
+      {snapReady && a.cards.length > 0 && <div className="mt-3 grid grid-cols-1 gap-3">{a.cards.map((c, i) => <GenCard key={i} card={{ ...c, span: 4 }} />)}</div>}
+    </section>
   );
 }
 

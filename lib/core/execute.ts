@@ -29,7 +29,7 @@ export async function prepareTool(owner: string, toolId: string, params: Record<
   return withSimulation(await tool.adapter.buildTool(owner, toolId, params, ctx));
 }
 
-async function withSimulation(built: BuiltAction): Promise<Prepared> {
+export async function withSimulation(built: BuiltAction): Promise<Prepared> {
   if (!built.txs.length) throw new Error("Nothing to do.");
   const simulations = await Promise.all(built.txs.map((tx) => simulate(tx).catch((e) => ({ ok: false, error: String(e) }))));
   return { ...built, simulations };
