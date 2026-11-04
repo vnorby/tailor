@@ -146,7 +146,7 @@ export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Pre
 
   const client = new Anthropic();
   const stream = client.beta.messages.stream({
-    model: "claude-opus-5-5",
+    model: "claude-sonnet-5-5", // routine layout work: fast and cheap; the agent uses Opus
     max_tokens: 16000,
     // A request the classifiers decline is re-run server-side on a fallback model.
     betas: ["server-side-fallback-2026-07-01"],
@@ -217,6 +217,36 @@ export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Pre
 
   home.generatedAt = Date.now();
   yield { type: "done", home, prefs: { instructions }, reply };
+}
+
+/**
+ * A sensible home built in code from the snapshot alone — shown instantly while Claude
+ * personalizes, and used whenever generation isn't available. Groups by what things are.
+ */
+export function instantHome(snap: Snapshot): Home {
+  const by = (pred: (p: Snapshot["positions"][number]) => boolean) => snap.positions.filter(pred).sort((a, b) => b.risk.score - a.risk.score || b.valueUsd - a.valueUsd).map((p) => p.id);
+  const risky = by((p) => p.risk.level !== "ok");
+  const rest = (pred: (p: Snapshot["positions"][number]) => boolean) => by((p) => p.risk.level === "ok" && pred(p));
+  const groups: [string, string[]][] = [
+    ["Needs attention", risky],
+    ["Loans", rest((p) => p.kind === "lending" && p.legs.some((l) => l.side === "borrow"))],
+    ["Trading", rest((p) => p.kind === "perp")],
+    ["Orders", rest((p) => p.kind === "order")],
+    ["Earning", rest((p) => (p.kind === "lending" && !p.legs.some((l) => l.side === "borrow")) || p.kind === "vault" || p.kind === "lp")],
+    ["Staked", rest((p) => p.kind === "stake" || p.protocol === "lst")],
+    ["Other", rest((p) => p.kind === "prediction" || p.kind === "other")],
+  ];
+  const sections: Section[] = groups.filter(([, ids]) => ids.length).map(([title, positionIds]) => ({ kind: "positions", title, positionIds }));
+  sections.push({ kind: "tokens" });
+  const empty = snap.netWorthUsd < 1 && !snap.positions.length;
+  const top = snap.positions.filter((p) => p.risk.level !== "ok").sort((a, b) => b.risk.score - a.risk.score)[0];
+  const details: Record<string, Card> = {};
+  for (const p of snap.positions.filter((x) => x.risk.level !== "ok" || x.valueUsd > 1000).slice(0, 6)) details[p.id] = defaultCard(p);
+  return {
+    alert: top ? { text: `${top.title}: ${top.risk.reason ?? "needs attention"}`.slice(0, 90), tone: top.risk.level === "danger" ? "danger" : "warn", positionId: top.id } : undefined,
+    actions: empty ? ["fund", "receive"] : snap.netWorthUsd < 20 ? ["fund", "receive", "send", "swap"] : ["send", "receive", "swap"],
+    sections: empty ? [] : sections, details, generatedAt: Date.now(),
+  };
 }
 
 async function* fallback(snap: Snapshot, prefs: Prefs, home: Home): AsyncGenerator<HomeEvent> {

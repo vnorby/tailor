@@ -22,7 +22,7 @@ type Target =
   | { kind: "tool"; tool: ToolDef; params: Record<string, string>; form?: boolean }
   | { kind: "prepared"; prep: Prepared; title?: string };
 
-export interface Prepared { txs: string[]; summary: string; warnings?: string[]; simulations: { ok: boolean; error?: string }[]; preview?: Preview | null }
+export interface Prepared { txs: string[]; summary: string; warnings?: string[]; simulations: { ok: boolean; error?: string }[]; preview?: Preview | null; verification?: { matches: boolean; note: string } }
 
 type Stage =
   | { s: "form" }
@@ -147,6 +147,11 @@ function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(
         {(stage.s === "review" || stage.s === "signing") && (
           <div className="flex flex-col gap-3">
             <p className="text-[15px] leading-snug">{stage.prep.summary}</p>
+            {stage.prep.verification && (
+              <p className={`rounded-lg px-3 py-2 text-[13px] ${stage.prep.verification.matches ? "bg-pos/12 text-pos" : "bg-danger/12 text-danger"}`}>
+                {stage.prep.verification.matches ? "Independent check: matches your request. " : "Independent check: this may not be what you asked for. "}<span className="opacity-85">{stage.prep.verification.note}</span>
+              </p>
+            )}
             {stage.prep.preview && <BalanceChanges preview={stage.prep.preview} />}
             {stage.prep.warnings?.map((w) => <p key={w} className="text-[13px] text-warn">{w}</p>)}
             <ul className="flex flex-col gap-1 text-[12.5px]">

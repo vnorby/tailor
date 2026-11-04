@@ -17,6 +17,7 @@ import { sanitizeCard, type Card } from "@/lib/genui/spec";
 import { generateHome, type Home, type HomeEvent, type Profile } from "@/lib/genui/home";
 import { generateTheme, type Theme } from "@/lib/genui/theme";
 import { buildAnchorIx, decodeAnchorAccount, fetchIdl, summarizeIdl } from "./idl";
+import { verifyIntent, verifyToolParams } from "./verify";
 
 export type AgentEvent =
   | { type: "status"; text: string; source: "ai" }
@@ -103,14 +104,20 @@ function statusFor(name: string, input: Record<string, unknown>): string {
   }
 }
 
-interface Ctx { snap: Snapshot; tools: ToolDef[]; prefs: Prefs; profile: Profile | null; theme: Theme | null; current: Home | null; emit: (e: AgentEvent) => void; onHomeDone: (h: Home, p: Prefs) => Promise<void> }
+interface Ctx { request: string; snap: Snapshot; tools: ToolDef[]; prefs: Prefs; profile: Profile | null; theme: Theme | null; current: Home | null; emit: (e: AgentEvent) => void; onHomeDone: (h: Home, p: Prefs) => Promise<void> }
 
 async function runTool(name: string, input: Record<string, unknown>, c: Ctx): Promise<string> {
   const owner = c.snap.owner;
-  const proposal = (prep: Prepared) => {
+  const proposal = async (prep: Prepared, tool?: { id: string; params: Record<string, string> }) => {
     const ok = prep.simulations[0]?.ok;
-    if (ok) c.emit({ type: "proposal", prep });
-    return JSON.stringify({ built: true, simulation: prep.simulations.map((s) => (s.ok ? "ok" : `failed: ${s.error}`)), summary: prep.summary, warnings: prep.warnings, shownToUser: !!ok });
+    if (ok) {
+      // A separate check, blind to the agent's reasoning, that this is what the user asked for:
+      // parameters for Tailor's own builders, the decoded transaction for anything custom.
+      prep.verification = await (tool ? verifyToolParams(c.request, { ...tool, summary: prep.summary }, prep.txs[0], owner) : verifyIntent(c.request, prep.txs[0], owner))
+        .catch(() => ({ matches: false, note: "Couldn't independently check this transaction." }));
+      c.emit({ type: "proposal", prep });
+    }
+    return JSON.stringify({ built: true, simulation: prep.simulations.map((s) => (s.ok ? "ok" : `failed: ${s.error}`)), summary: prep.summary, warnings: prep.warnings, shownToUser: !!ok, independentCheck: prep.verification });
   };
   switch (name) {
     case "get_account": {
@@ -142,13 +149,13 @@ async function runTool(name: string, input: Record<string, unknown>, c: Ctx): Pr
       const [pda, bump] = PublicKey.findProgramAddressSync(((input.seeds as string[]) ?? []).map(seedBytes), new PublicKey(String(input.program_id)));
       return JSON.stringify({ address: pda.toBase58(), bump });
     }
-    case "use_tool": return proposal(await prepareTool(owner, String(input.tool_id), (input.params as Record<string, string>) ?? {}));
-    case "position_action": return proposal(await prepareAction(owner, String(input.position_id), String(input.action_id), (input.params as Record<string, string>) ?? {}));
+    case "use_tool": { const params = (input.params as Record<string, string>) ?? {}; return await proposal(await prepareTool(owner, String(input.tool_id), params), { id: String(input.tool_id), params }); }
+    case "position_action": { const params = (input.params as Record<string, string>) ?? {}; return await proposal(await prepareAction(owner, String(input.position_id), String(input.action_id), params), { id: `${input.position_id} → ${input.action_id}`, params }); }
     case "build_anchor_transaction": {
       const list = (input.instructions as { program_id: string; instruction: string; accounts: Record<string, string>; args?: Record<string, unknown>; remaining_accounts?: { pubkey: string; is_writable?: boolean; is_signer?: boolean }[] }[]) ?? [];
       const ixs = [];
       for (const i of list.slice(0, 8)) ixs.push(await buildAnchorIx(owner, i.program_id, i.instruction, i.accounts ?? {}, i.args ?? {}, i.remaining_accounts ?? []));
-      return proposal(await withSimulation({ txs: [await buildTx(owner, ixs)], summary: String(input.summary ?? "Custom transaction").slice(0, 200), warnings: ["Built by Tailor's agent for a program without a verified Tailor integration. Check the balance changes carefully."] }));
+      return await proposal(await withSimulation({ txs: [await buildTx(owner, ixs)], summary: String(input.summary ?? "Custom transaction").slice(0, 200), warnings: ["Built by Tailor's agent for a program without a verified Tailor integration. Check the balance changes carefully."] }));
     }
     case "build_raw_transaction": {
       const list = (input.instructions as { program_id: string; keys: { pubkey: string; is_signer: boolean; is_writable: boolean }[]; data_base64: string }[]) ?? [];
@@ -156,7 +163,7 @@ async function runTool(name: string, input: Record<string, unknown>, c: Ctx): Pr
         for (const k of i.keys) if (k.is_signer && k.pubkey !== owner) throw new Error(`Only the wallet owner can sign; ${k.pubkey} can't.`);
         return new TransactionInstruction({ programId: new PublicKey(i.program_id), keys: i.keys.map((k) => ({ pubkey: new PublicKey(k.pubkey), isSigner: k.is_signer, isWritable: k.is_writable })), data: Buffer.from(i.data_base64 ?? "", "base64") });
       });
-      return proposal(await withSimulation({ txs: [await buildTx(owner, ixs)], summary: String(input.summary ?? "Custom transaction").slice(0, 200), warnings: ["Built from raw instructions by Tailor's agent. Check the balance changes carefully."] }));
+      return await proposal(await withSimulation({ txs: [await buildTx(owner, ixs)], summary: String(input.summary ?? "Custom transaction").slice(0, 200), warnings: ["Built from raw instructions by Tailor's agent. Check the balance changes carefully."] }));
     }
     case "show_card": {
       const raw = { span: 4, ...(input.card as object) } as { children?: unknown[] };
@@ -192,7 +199,7 @@ async function runTool(name: string, input: Record<string, unknown>, c: Ctx): Pr
 
 export async function* runAgent(opts: { snap: Snapshot; tools: ToolDef[]; prefs: Prefs; profile: Profile | null; theme: Theme | null; current: Home | null; prompt: string; onHomeDone: (h: Home, p: Prefs) => Promise<void> }): AsyncGenerator<AgentEvent> {
   const queue: AgentEvent[] = [];
-  const ctx: Ctx = { ...opts, emit: (e) => queue.push(e) };
+  const ctx: Ctx = { ...opts, request: opts.prompt, emit: (e) => queue.push(e) };
   const client = new Anthropic();
   const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: `<wallet>\n${walletContext(opts.snap, opts.tools, opts.prefs, opts.profile)}\n</wallet>\n\n<request>${opts.prompt.slice(0, 2000)}</request>` }];
   let reply = "";

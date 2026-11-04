@@ -98,7 +98,7 @@ export async function* generateTheme(input: { activities: string[]; style: strin
   if (!process.env.ANTHROPIC_API_KEY) { yield { type: "theme", theme: DEFAULT_THEME }; return; }
   const client = new Anthropic();
   const stream = client.beta.messages.stream({
-    model: "claude-opus-5-5",
+    model: "claude-sonnet-5-5",
     max_tokens: 4000,
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",

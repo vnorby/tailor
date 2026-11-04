@@ -3,7 +3,7 @@ import { makeCtx } from "./snapshot";
 import { simulate, type SimResult } from "./solana";
 import type { BuiltAction, Protocol } from "./types";
 
-export interface Prepared extends BuiltAction { simulations: SimResult[] }
+export interface Prepared extends BuiltAction { simulations: SimResult[]; verification?: { matches: boolean; note: string } }
 
 /**
  * Re-read the position server-side (never trust client copies), build the action,

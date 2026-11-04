@@ -9,7 +9,7 @@ import { NextResponse, type NextRequest } from "next/server";
  *    abuse; use a shared store such as Upstash for a hard global limit).
  */
 
-const LIMITED = ["/api/home", "/api/page", "/api/theme", "/api/agent"];
+const LIMITED = ["/api/home", "/api/page", "/api/theme", "/api/agent", "/api/security/explain"];
 const WINDOWS = [
   { ms: 60_000, max: 30, label: "minute" },
   { ms: 60 * 60_000, max: 300, label: "hour" },

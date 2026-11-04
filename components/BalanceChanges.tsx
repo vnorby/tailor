@@ -3,7 +3,7 @@
 import { amt, usd } from "@/lib/ui/format";
 
 export interface Preview {
-  ok: boolean; error?: string; feeLamports: number;
+  ok: boolean; error?: string; feeLamports: number; rentLamports?: number;
   changes: { mint: string; symbol: string; name?: string; icon?: string; decimals: number; delta: number; usd?: number }[];
   programs: { id: string; name?: string }[];
   warnings: string[];
@@ -37,6 +37,9 @@ export function BalanceChanges({ preview, compact }: { preview: Preview; compact
           {c.usd != null && !compact && <span className="num text-[12px] text-dim w-20 text-right">{usd(Math.abs(c.usd))}</span>}
         </div>
       ))}
+      {!!preview.rentLamports && Math.abs(preview.rentLamports) > 0 && (
+        <div className="flex justify-between text-[12px] text-faint"><span>{preview.rentLamports > 0 ? "Includes account rent refunded" : "Includes account rent deposit"}</span><span className="num">{preview.rentLamports > 0 ? "+" : "−"}{(Math.abs(preview.rentLamports) / 1e9).toFixed(6)} SOL</span></div>
+      )}
       <div className="flex justify-between text-[12px] text-faint"><span>Network fee</span><span className="num">{(preview.feeLamports / 1e9).toFixed(6)} SOL</span></div>
       {warnings}
     </div>

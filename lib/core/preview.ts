@@ -26,6 +26,8 @@ export interface Preview {
   warnings: string[];
   /** Subset of `warnings` that are severe enough to stop and think (durable nonce, ownership changes…). */
   critical: string[];
+  /** Net token-account rent in the SOL change: + refunded (accounts closed), − deposited (accounts opened). */
+  rentLamports: number;
   unitsConsumed?: number;
 }
 
@@ -390,6 +392,7 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
   };
   const preSol = ownerPre?.lamports ?? 0;
   let solDeltaLamports = 0;
+  let rentLamports = 0;
   if (!sim.err && sim.accounts) {
     simAddrs.forEach((addr, i) => {
       const post = sim.accounts![i] ?? null;
@@ -406,6 +409,12 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
       if (!preOwned && !postOwned) return;
       const preAmt = preOwned ? BigInt(tPre!.tokenAmount.amount) : BigInt(0);
       const postAmt = postOwned ? BigInt(tPost!.tokenAmount.amount) : BigInt(0);
+      // Rent: lamports held by the account beyond its (wrapped-SOL) balance come back when it's closed.
+      const native = (t: typeof tPre) => t?.mint === SOL_MINT;
+      // The simulator reports a closed account as missing or as an empty 0-lamport account.
+      const closed = !post || !post.lamports, opened = !before || !before.lamports;
+      if (preOwned && closed) rentLamports += (before?.lamports ?? 0) - (native(tPre) ? Number(preAmt) : 0);
+      if (postOwned && opened) rentLamports -= (post?.lamports ?? 0) - (native(tPost) ? Number(postAmt) : 0);
       // Same mint pre/post (or created/closed). A changed owner moves the whole balance out.
       if (tPre && preOwned && (!tPost || tPost.mint === tPre.mint)) bump(tPre.mint, postAmt - preAmt, tPre.tokenAmount.decimals);
       else {
@@ -442,6 +451,7 @@ export async function previewTransaction(base64Tx: string, owner: string): Promi
 
   return {
     ok: !sim.err,
+    rentLamports,
     ...(sim.err ? { error: plainError(sim.err, sim.logs) } : {}),
     feeLamports,
     changes,

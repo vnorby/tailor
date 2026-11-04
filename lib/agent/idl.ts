@@ -165,3 +165,14 @@ export async function decodeAnchorAccount(programId: string, data: Buffer): Prom
   }
   return null;
 }
+
+/** Name and arguments of an Anchor instruction, if the program's IDL is on chain. */
+export async function decodeInstruction(programId: string, data: Buffer): Promise<{ name: string; args: unknown } | null> {
+  const idl = await fetchIdl(programId);
+  if (!idl || data.length < 8) return null;
+  try {
+    const coder = isNew(idl) ? new Coder30(idl as unknown as Idl30) : new (Coder29 as unknown as new (i: unknown) => { decode(d: Buffer): { name: string; data: unknown } | null })(idl);
+    const r = (coder as unknown as { decode(d: Buffer): { name: string; data: unknown } | null }).decode(data);
+    return r ? { name: r.name, args: plain(r.data) } : null;
+  } catch { return null; }
+}
