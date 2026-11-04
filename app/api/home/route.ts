@@ -44,7 +44,7 @@ export async function POST(req: Request) {
         if (!prompt && !b.reset && saved.layout && saved.fingerprint === fp) {
           send({ type: "done", home: saved.layout as unknown as Home, prefs, reply: "", cached: true });
         } else {
-          for await (const ev of generateHome(snap, tools, prefs, profile, prompt || undefined, (saved.layout as unknown as Home) ?? (b.current && Array.isArray(b.current.sections) ? b.current : null))) {
+          for await (const ev of generateHome(snap, tools, prefs, profile, prompt || undefined, (b.current && Array.isArray(b.current.sections) ? b.current : null) ?? (saved.layout as unknown as Home) ?? null)) {
             if (ev.type === "restyle") {
               // Hand the look to the theme designer, starting from the user's current theme.
               for await (const t of generateTheme({ activities: profile?.activities ?? [], style: ev.request, current: b.theme ?? null })) {
