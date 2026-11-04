@@ -4,6 +4,7 @@ import { isAddress } from "@/lib/core/solana";
 import { load, save } from "@/lib/core/store";
 import { fingerprint } from "@/lib/genui/generate";
 import { generateHome, type Home, type Profile } from "@/lib/genui/home";
+import { generateTheme, type Theme } from "@/lib/genui/theme";
 
 export const maxDuration = 300;
 
@@ -14,7 +15,7 @@ export const maxDuration = 300;
  * If nothing changed and there's no prompt, the cached home is replayed instantly.
  */
 export async function POST(req: Request) {
-  const b = (await req.json().catch(() => ({}))) as { owner?: string; prompt?: string; reset?: boolean; fresh?: boolean; profile?: Profile };
+  const b = (await req.json().catch(() => ({}))) as { owner?: string; prompt?: string; reset?: boolean; fresh?: boolean; profile?: Profile; theme?: Theme; current?: Home };
   const owner = b.owner ?? "";
   if (!isAddress(owner)) return Response.json({ error: "Not a valid Solana address." }, { status: 400 });
   const prompt = typeof b.prompt === "string" ? b.prompt.trim().slice(0, 1000) : "";
@@ -43,7 +44,15 @@ export async function POST(req: Request) {
         if (!prompt && !b.reset && saved.layout && saved.fingerprint === fp) {
           send({ type: "done", home: saved.layout as unknown as Home, prefs, reply: "", cached: true });
         } else {
-          for await (const ev of generateHome(snap, tools, prefs, profile, prompt || undefined)) {
+          for await (const ev of generateHome(snap, tools, prefs, profile, prompt || undefined, (saved.layout as unknown as Home) ?? (b.current && Array.isArray(b.current.sections) ? b.current : null))) {
+            if (ev.type === "restyle") {
+              // Hand the look to the theme designer, starting from the user's current theme.
+              for await (const t of generateTheme({ activities: profile?.activities ?? [], style: ev.request, current: b.theme ?? null })) {
+                if (t.type === "status") send({ type: "status", source: "ai", text: t.text });
+                else send(t);
+              }
+              continue;
+            }
             send(ev);
             if (ev.type === "done") await save(key, { layout: ev.home as never, prefs: ev.prefs, fingerprint: fp });
           }

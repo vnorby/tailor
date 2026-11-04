@@ -39,6 +39,7 @@ export type HomeEvent =
   | { type: "section"; section: Section }
   | { type: "detail"; positionId: string; card: Card }
   | { type: "intent"; intent: Intent }
+  | { type: "restyle"; request: string }
   | { type: "done"; home: Home; prefs: Prefs; reply: string }
   | { type: "error"; error: string };
 
@@ -58,6 +59,7 @@ ONLY JSON objects, one per line, no prose, no code fences, in this order:
    - {"kind":"card","card":Card}  a small custom module, max 2, only when it adds something rows can't (e.g. a perps P&L strip, a yield comparison). Must be compact.
 5. Up to 4 {"detail": {"positionId": id, "card": Card}} — the screen shown when the user taps that position. For the riskiest/largest positions.
 6. Optional {"intent": {"toolId":…, "params":{…}} | {"positionId":…, "actionId":…, "params":{…}}} — when the user's request is to DO something now (send, swap, repay…): this opens that action prefilled.
+   Optional {"restyle": "<what to change about the look, in the user's words>"} — when the request is about colors, fonts, theme, vibe or visual style. A separate designer restyles the whole wallet from it. If the request is ONLY about the look, output just status, restyle and done (no alert/actions/sections): the current layout is kept.
 7. {"done": {"instructions": [complete updated standing instructions], "reply": "<max 15 words>"}}
 
 # Card (for detail and custom modules)
@@ -117,7 +119,8 @@ function sanitizeIntent(raw: unknown, snap: Snapshot, tools: ToolDef[]): Intent 
   return null;
 }
 
-export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Prefs, profile: Profile | null, request?: string): AsyncGenerator<HomeEvent> {
+export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Prefs, profile: Profile | null, request?: string, current?: Home | null): AsyncGenerator<HomeEvent> {
+  let restyled = false;
   const home: Home = { actions: ["send", "receive", "swap"], sections: [], details: {}, generatedAt: Date.now() };
   let instructions = prefs.instructions, reply = "";
 
@@ -176,6 +179,9 @@ export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Pre
           const d = o.detail as Record<string, unknown>;
           const card = typeof d.positionId === "string" && snap.positions.some((p) => p.id === d.positionId) ? sanitizeCard({ ...(d.card as object), positionId: d.positionId }, { snap, tools }) : null;
           if (card) { home.details[d.positionId as string] = card; yield { type: "detail", positionId: d.positionId as string, card }; }
+        } else if (typeof o.restyle === "string" && o.restyle.trim()) {
+          restyled = true;
+          yield { type: "restyle", request: o.restyle.slice(0, 500) };
         } else if (o.intent) {
           const i = sanitizeIntent(o.intent, snap, tools);
           if (i) yield { type: "intent", intent: i };
@@ -190,6 +196,11 @@ export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Pre
     console.error("home generation failed:", e);
     if (!home.sections.length) { yield* fallback(snap, prefs, home); return; }
     reply = `Stopped early (${e instanceof Error ? e.message : "error"}).`;
+  }
+  // A look-only request: keep the layout the user already has.
+  if (!home.sections.length && restyled && current) {
+    yield { type: "done", home: current, prefs: { instructions }, reply };
+    return;
   }
   if (!home.sections.length) {
     if (process.env.TAILOR_DEBUG) { const f = await stream.finalMessage().catch(() => null); console.error("home: nothing parsed", f?.stop_reason, JSON.stringify((f as unknown as { stop_details?: unknown })?.stop_details), JSON.stringify(f?.content).slice(0, 1500)); }
