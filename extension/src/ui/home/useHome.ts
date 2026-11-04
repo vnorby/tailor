@@ -4,6 +4,13 @@ import type { Home, HomeEvent, Intent, Section } from "@/lib/genui/home";
 import type { Card } from "@/lib/genui/spec";
 import { applyTheme, loadProfile, loadTheme, saveTheme, type Theme } from "../theme";
 
+const cacheKey = (owner: string) => `home:${owner}`;
+interface Cached { snap: Snapshot; tools: ToolDef[]; home: Home; prefs: Prefs; at: number }
+async function readCache(owner: string): Promise<Cached | null> {
+  try { const r = await chrome.storage.local.get(cacheKey(owner)); return (r[cacheKey(owner)] as Cached | undefined) ?? null; } catch { return null; }
+}
+function writeCache(owner: string, c: Cached) { void chrome.storage.local.set({ [cacheKey(owner)]: c }).catch(() => {}); }
+
 export interface Note { text: string; source: "chain" | "ai"; at: number }
 export interface Answer { prompt: string; text: string; cards: Card[]; done: boolean; error?: string }
 export interface Proposal { txs: string[]; summary: string; warnings?: string[]; simulations: { ok: boolean; error?: string }[] }
@@ -36,10 +43,9 @@ export function useHome(apiBase: string, owner: string) {
     abort.current?.abort();
     const ac = new AbortController(); abort.current = ac;
     setWorking(true); setError(null); setReply(null); setNotes([]);
-    const isEdit = !!opts.prompt || !!opts.reset;
-    // A fresh build replaces the page as it streams; an edit keeps the old page until the new one starts arriving.
-    let replaced = !isEdit;
-    if (!isEdit) { setSections([]); setAlert(undefined); }
+    // Whatever is on screen (cached or previous) stays until replacement content starts arriving.
+    let replaced = false;
+    let latestSnap: Snapshot | null = null, latestTools: ToolDef[] = [];
     const freshSections: Section[] = [];
     try {
       const [profile, theme] = await Promise.all([loadProfile(), loadTheme()]);
@@ -54,9 +60,11 @@ export function useHome(apiBase: string, owner: string) {
         while ((nl = buf.indexOf("\n")) >= 0) {
           const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
           if (!line.trim()) continue;
-          const ev = JSON.parse(line) as HomeEvent | { type: "snapshot"; snapshot: Snapshot; tools: ToolDef[] } | { type: "done"; home: Home; prefs: Prefs; reply: string; cached?: boolean } | { type: "theme"; theme: Theme };
+          const ev = JSON.parse(line) as HomeEvent | { type: "snapshot"; snapshot: Snapshot; tools: ToolDef[] } | { type: "done"; home: Home; prefs: Prefs; reply: string; cached?: boolean } | { type: "theme"; theme: Theme } | { type: "instant"; home: Home };
           switch (ev.type) {
-            case "snapshot": setSnap(ev.snapshot); setTools(ev.tools); break;
+            case "snapshot": setSnap(ev.snapshot); setTools(ev.tools); latestSnap = ev.snapshot; latestTools = ev.tools; break;
+            // Code-built home, shown until Claude's personalized one arrives.
+            case "instant": if (!current.current) { setSections(ev.home.sections); setActions(ev.home.actions); setAlert(ev.home.alert); setDetails(ev.home.details ?? {}); } break;
             case "status": setNotes((n) => [...n, { text: ev.text, source: ev.source, at: Date.now() }]); break;
             case "alert": setAlert(ev.alert); break;
             case "actions": setActions(ev.actions); break;
@@ -128,7 +136,21 @@ export function useHome(apiBase: string, owner: string) {
     } finally { if (abort.current === ac) setWorking(false); }
   }, [apiBase, owner]);
 
-  useEffect(() => { setSnap(null); setSections([]); setDetails({}); void run(); return () => abort.current?.abort(); }, [run]);
+  // Open instantly from the last-known wallet, then refresh in the background.
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    setSnap(null); setSections([]); setDetails({}); current.current = null; setCachedAt(null);
+    void readCache(owner).then((c) => {
+      if (!live) return;
+      if (c) {
+        setSnap(c.snap); setTools(c.tools); setSections(c.home.sections); setActions(c.home.actions); setAlert(c.home.alert);
+        setDetails(c.home.details ?? {}); setPrefs(c.prefs); current.current = c.home; setCachedAt(c.at);
+      }
+      void run();
+    });
+    return () => { live = false; abort.current?.abort(); };
+  }, [run, owner]);
 
-  return { snap, tools, alert, actions, sections, details, notes, prefs, reply, setReply, intent, clearIntent: () => setIntent(null), working, error, run, ask, answer, clearAnswer: () => setAnswer(null), proposal, clearProposal: () => setProposal(null) };
+  return { cachedAt, snap, tools, alert, actions, sections, details, notes, prefs, reply, setReply, intent, clearIntent: () => setIntent(null), working, error, run, ask, answer, clearAnswer: () => setAnswer(null), proposal, clearProposal: () => setProposal(null) };
 }

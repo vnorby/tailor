@@ -54,6 +54,8 @@ export type UiRequest =
   | { type: "sendSigned"; tx: string }
   | { type: "getPending"; id: string }
   | { type: "decide"; id: string; approve: boolean; signed?: string[] }   // signed: Ledger-signed txs from the approval window
+  | { type: "setAlerts"; on: boolean }
+  | { type: "checkAlerts" }
   | { type: "connectedSites" }
   | { type: "disconnectSite"; origin: string };
 

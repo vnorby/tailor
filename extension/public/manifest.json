@@ -29,7 +29,8 @@
   "permissions": [
     "storage",
     "alarms",
-    "sidePanel"
+    "sidePanel",
+    "notifications"
   ],
   "content_scripts": [
     {

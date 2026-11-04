@@ -97,6 +97,7 @@ function Settings({ state, activeId, onBack, refresh }: { state: WalletState; ac
         </section>
       )}
       <PasskeySetting />
+      <AlertsSetting />
       <section className="flex flex-col gap-2">
         <h3 className="text-[11px] uppercase tracking-[0.12em] text-faint">Look</h3>
         <button className="btn justify-center" onClick={() => chrome.tabs.create({ url: "onboarding.html" })}>Restyle wallet</button>
@@ -167,6 +168,21 @@ function PasskeySetting() {
       ) : (
         <button className="btn justify-center" onClick={() => setAsking(true)}>Unlock with Touch ID / passkey</button>
       )}
+    </section>
+  );
+}
+
+function AlertsSetting() {
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => { void chrome.storage.local.get("alerts").then(({ alerts }) => setOn(alerts !== false)); }, []);
+  if (on === null) return null;
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="text-[11px] uppercase tracking-[0.12em] text-faint">Alerts</h3>
+      <label className="flex items-center justify-between gap-3">
+        <span className="text-dim">Notify me about liquidation risk, filled orders and closed positions</span>
+        <input type="checkbox" checked={on} onChange={async (e) => { setOn(e.target.checked); await call({ type: "setAlerts", on: e.target.checked }); }} />
+      </label>
     </section>
   );
 }

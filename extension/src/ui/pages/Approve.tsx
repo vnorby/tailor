@@ -26,6 +26,15 @@ function Approve() {
 
   useEffect(() => { call<PendingRequest>({ type: "getPending", id }).then(setReq).catch((e) => setErr(e.message)); }, [id]);
 
+  // Plain-language read of the first transaction, on top of the deterministic preview.
+  const [explain, setExplain] = useState<Explanation | null | "loading">(null);
+  useEffect(() => {
+    if (!req || !(req.method === "signTransaction" || req.method === "signAndSendTransaction") || !state?.apiBase || !req.payload[0]) return;
+    setExplain("loading");
+    fetch(`${state.apiBase}/api/security/explain`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx: req.payload[0], owner: req.account, origin: req.origin }) })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null).then((e) => setExplain(e));
+  }, [req, state?.apiBase]);
+
   const isTx = req?.method === "signTransaction" || req?.method === "signAndSendTransaction";
   useEffect(() => {
     if (!req || !isTx || !state?.apiBase) return;
@@ -94,6 +103,7 @@ function Approve() {
               <li className="text-faint">✗ It can&apos;t move funds without your approval</li>
             </ul>
           )}
+          {isTx && explain && <ExplainCard e={explain} />}
           {isTx && previews.map((p, i) => (
             <div key={i} className="flex flex-col gap-1">
               {req.payload.length > 1 && <div className="text-[11px] text-faint">Transaction {i + 1} of {req.payload.length}</div>}
@@ -114,6 +124,24 @@ function Approve() {
         </>
       )}
     </Shell>
+  );
+}
+
+interface Explanation { summary: string; risk: "low" | "medium" | "high"; points: string[]; advice: string }
+
+function ExplainCard({ e }: { e: Explanation | "loading" }) {
+  if (e === "loading") return <div className="card p-3 text-[13px] text-dim caret">Reading this transaction</div>;
+  const tone = e.risk === "high" ? "bg-danger/14 text-danger" : e.risk === "medium" ? "bg-warn/14 text-warn" : "bg-pos/14 text-pos";
+  return (
+    <section className="card p-3.5 flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${tone}`}>{e.risk} risk</span>
+        <span className="text-[10.5px] text-faint">Tailor&apos;s read · AI, from the simulation</span>
+      </div>
+      <p className="text-[14px] leading-snug">{e.summary}</p>
+      {e.points.length > 0 && <ul className="flex flex-col gap-1 text-[12.5px] text-chalk/85 list-disc pl-4">{e.points.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+      <p className="text-[12.5px] text-dim">{e.advice}</p>
+    </section>
   );
 }
 

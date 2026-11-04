@@ -10,6 +10,7 @@
  */
 import bs58 from "bs58";
 import * as vault from "./vault";
+import { checkAlerts, openWallet, startAlerts } from "./alerts";
 import { applySignature, b64 } from "~/shared/tx";
 import { verifyDeviceSigned } from "~/shared/verify";
 import { sign } from "~/vault/derive";
@@ -220,6 +221,8 @@ async function handleUi(req: UiRequest): Promise<unknown> {
     case "getPending": { const p = pending.get(req.id); if (!p) throw new Error("This request expired."); const { resolve: _r, windowId: _w, ...pub } = p; return pub; }
     case "decide": decide(req.id, req.approve, req.signed); return null;
     case "connectedSites": return Object.entries((await vault.getMeta()).sites).map(([origin, v]) => ({ origin, ...v }));
+    case "setAlerts": { await chrome.storage.local.set({ alerts: req.on }); if (req.on) void checkAlerts(); return null; }
+    case "checkAlerts": await checkAlerts(); return null;
     case "disconnectSite": { const m = await vault.getMeta(); delete m.sites[req.origin]; await vault.setMeta(m); return null; }
   }
 }
@@ -241,7 +244,10 @@ chrome.runtime.onMessage.addListener((req: UiRequest, sender, sendResponse) => {
 
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name === "autolock") { await vault.lock(); await broadcastAccounts(); }
+  if (a.name === "alerts") await checkAlerts().catch(() => {});
 });
+chrome.notifications.onClicked.addListener((id) => { void chrome.notifications.clear(id); void openWallet(); });
+startAlerts();
 
 chrome.runtime.onInstalled.addListener(async (d) => {
   await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });

@@ -116,7 +116,7 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
         </section>
 
         {/* What the AI is doing */}
-        <Working notes={h.notes} working={h.working} />
+        <Working notes={h.notes} working={h.working} quiet={h.sections.length > 0} />
 
         {arrived && <p className="mx-4 mt-3 rounded-[calc(var(--t-radius)*.8)] bg-pos/14 text-pos px-3 py-2.5 text-[13px] rise">{arrived}</p>}
         {empty && !watch && <Funding address={address} apiBase={apiBase} compact={compact} />}
@@ -189,11 +189,13 @@ function AnswerPanel({ a, onClose, snapReady }: { a: import("./useHome").Answer;
 }
 
 /** The AI's progress: chain reads tick off quietly, its notes type in. Collapses when done. */
-function Working({ notes, working }: { notes: Note[]; working: boolean }) {
+function Working({ notes, working, quiet }: { notes: Note[]; working: boolean; quiet?: boolean }) {
   const [open, setOpen] = useState(false);
   const ai = notes.filter((n) => n.source === "ai");
   const chain = notes.filter((n) => n.source === "chain");
   if (!working && !notes.length) return null;
+  // Refreshing behind content that's already on screen: a thin line, not a panel.
+  if (working && quiet && !ai.length) return <div className="mx-4 mt-4 h-[2px] rounded-full overflow-hidden bg-panel-2"><div className="h-full w-1/3 bg-tape animate-[slide_1.2s_ease-in-out_infinite]" /></div>;
   if (!working) {
     return ai.length ? (
       <div className="mx-4 mt-4">
