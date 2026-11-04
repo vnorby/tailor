@@ -29,7 +29,7 @@ export interface DomainCheck {
 export const OFFICIAL_DOMAINS: Record<string, string> = {
   "jup.ag": "Jupiter", "jupiter.ag": "Jupiter",
   "phantom.com": "Phantom", "phantom.app": "Phantom",
-  "raydium.io": "Raydium", "orca.so": "Orca", "kamino.finance": "Kamino",
+  "raydium.io": "Raydium", "orca.so": "Orca", "kamino.finance": "Kamino", "kamino.com": "Kamino",
   "marginfi.com": "marginfi", "drift.trade": "Drift", "tensor.trade": "Tensor",
   "magiceden.io": "Magic Eden", "magiceden.us": "Magic Eden", "pump.fun": "pump.fun",
   "solana.com": "Solana", "solana.org": "Solana", "solflare.com": "Solflare",

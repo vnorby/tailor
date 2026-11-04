@@ -5,7 +5,7 @@
  * (spam tokens, empty accounts) and concrete recommendations. Read-only.
  */
 import { PublicKey } from "@solana/web3.js";
-import { connection, jupHeaders, walletTokens } from "@/lib/core/solana";
+import { connection, jupHeaders, walletTokens, jupBase } from "@/lib/core/solana";
 
 const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
@@ -79,7 +79,7 @@ async function symbols(mints: string[]): Promise<Map<string, string>> {
   const uniq = [...new Set(mints)];
   for (let i = 0; i < uniq.length; i += 100) {
     try {
-      const r = await fetch(`https://api.jup.ag/tokens/v2/search?query=${uniq.slice(i, i + 100).join(",")}`, { headers: jupHeaders(), cache: "no-store", signal: AbortSignal.timeout(5000) });
+      const r = await fetch(`${jupBase()}/tokens/v2/search?query=${uniq.slice(i, i + 100).join(",")}`, { headers: jupHeaders(), cache: "no-store", signal: AbortSignal.timeout(5000) });
       if (!r.ok) continue;
       for (const m of (await r.json()) as { id: string; symbol?: string }[]) if (m.symbol) out.set(m.id, m.symbol);
     } catch { /* cosmetic */ }

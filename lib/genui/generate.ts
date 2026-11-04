@@ -176,4 +176,10 @@ export function fallbackPage(snap: Snapshot): Page {
   return { headline: top ? `${top.title}: ${top.risk.reason ?? "needs attention"}.` : `${usd(snap.netWorthUsd)} across ${snap.positions.length} positions.`, cards, generatedAt: Date.now() };
 }
 
-export const fingerprint = (snap: Snapshot) => snap.positions.map((p) => `${p.id}:${p.risk.level}`).sort().join("|");
+/** What the saved home depends on: positions and their risk, which tokens are held, and whether the wallet is empty. */
+export const fingerprint = (snap: Snapshot) => [
+  snap.netWorthUsd < 1 && !snap.positions.length ? "empty" : "funded",
+  ...snap.positions.map((p) => `${p.id}:${p.risk.level}`).sort(),
+  // Only meaningful holdings: dust drifting around a threshold mustn't trigger a rebuild.
+  ...snap.tokens.filter((t) => (t.valueUsd ?? 0) >= 10).map((t) => t.mint).sort(),
+].join("|");

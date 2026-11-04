@@ -10,8 +10,9 @@
  */
 import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { createPhoenixClient, getPhoenixTraderSubaccountAddress, OrderFlags, Side, type PhoenixClient } from "@ellipsis-labs/rise";
-import type { Action, Adapter, BuiltAction, Position } from "@/lib/core/types";
-import { buildTx, num, pct, riskFromHealth, rpcUrl, usd, USDC_MINT } from "@/lib/core/solana";
+import type { Action, Adapter, BuiltAction, Ctx, Position } from "@/lib/core/types";
+import { buildTx, connection, num, pct, riskFromHealth, rpcUrl, usd, USDC_MINT } from "@/lib/core/solana";
+import { bestQuote } from "./swap";
 
 const API = process.env.PHOENIX_API_URL ?? "https://perp-api.phoenix.trade";
 const APP = "https://app.phoenix.trade";
@@ -60,9 +61,104 @@ function toWeb3(ix: KitIx): TransactionInstruction {
 
 const sideOf = (s: string | number) => (s === 0 || /bid|buy/i.test(String(s)) ? "bid" : "ask");
 
+// ---------- opening positions ----------
+
+export interface PerpMarket { symbol: string; name: string; logo?: string; mark: number; change24h?: number; fundingAnnual?: number; maxLeverage: number; volume24h?: number }
+
+/** Live market info for the long/short form: mark, 24h move, funding, max leverage. */
+export async function perpMarket(symbol: string): Promise<PerpMarket> {
+  const px = phoenix();
+  const sym = symbol.toUpperCase().replace(/-PERP$/, "");
+  await px.exchange.ready();
+  const m = px.exchange.market(sym as never) as unknown as { symbol: string; leverageTiers?: { maxLeverage: number }[]; metadata?: { name?: string; logoUri?: string } } | undefined;
+  if (!m) throw new Error(`Phoenix has no ${sym} perp.`);
+  const st = (await (px.api.markets() as unknown as { getLatestMarketStats(s: string): Promise<Record<string, number>> }).getLatestMarketStats(sym)) ?? {};
+  const mark = Number(st.mark_price), prev = Number(st.prev_day_mark_price);
+  if (!(mark > 0)) throw new Error(`No live price for ${sym}.`);
+  return {
+    symbol: sym, name: m.metadata?.name ?? sym, logo: m.metadata?.logoUri, mark,
+    change24h: prev > 0 ? (mark - prev) / prev : undefined, fundingAnnual: Number.isFinite(Number(st.annualized_funding_rate)) ? Number(st.annualized_funding_rate) / 100 : undefined,
+    maxLeverage: Math.max(1, ...(m.leverageTiers ?? []).map((t) => t.maxLeverage)), volume24h: Number(st.day_volume_usd) || undefined,
+  };
+}
+
+/** Active Phoenix perp markets, for the market picker. */
+export async function perpMarkets(): Promise<{ symbol: string; name: string; logo?: string }[]> {
+  const list = (await (phoenix().api.markets() as unknown as { getMarkets(): Promise<{ symbol: string; marketStatus: string; metadata?: { name?: string; logoUri?: string } }[]> }).getMarkets()) ?? [];
+  return list.filter((m) => m.marketStatus === "active").map((m) => ({ symbol: m.symbol, name: m.metadata?.name ?? m.symbol, logo: m.metadata?.logoUri }));
+}
+
+/**
+ * Open a long/short on an activated Phoenix account: deposit USDC margin, then a market order.
+ * Short on USDC? A SOL→USDC swap goes first as its own transaction.
+ */
+async function openPerp(owner: string, params: Record<string, string>, ctx: Ctx): Promise<BuiltAction> {
+  const px = phoenix();
+  const mkt = await perpMarket(params.market || "BTC");
+  const long = (params.side ?? "long").toLowerCase() !== "short";
+  const margin = Number(params.collateral);
+  if (!(margin > 0)) throw new Error("Enter how much USDC to put up as margin.");
+  const lev = Math.min(mkt.maxLeverage, Math.max(1, Number(params.leverage) || 2));
+  const slip = Math.min(5, Math.max(0.05, Number(params.slippage) || 0.5)) / 100;
+  const market = px.exchange.market(mkt.symbol as never) as unknown as { baseLotsDecimals?: number };
+  const lotDp = market.baseLotsDecimals ?? 2;
+  const lots = Math.floor(((margin * lev) / mkt.mark) * 10 ** lotDp);
+  if (lots < 1) throw new Error(`Too small: at ${lev}× this is under one ${mkt.symbol} lot. Add margin or leverage.`);
+  const baseUnits = (lots / 10 ** lotDp).toFixed(lotDp);
+  const limit = long ? mkt.mark * (1 + slip) : mkt.mark * (1 - slip);
+  const authority = owner as never;
+
+  const ixs: TransactionInstruction[] = [];
+  // Phoenix is invite-gated: a freshly registered trader can't deposit until Phoenix activates it
+  // (via a referral code on their site), so don't build a transaction that's bound to fail.
+  const trader = await getPhoenixTraderSubaccountAddress({ authority, traderPdaIndex: 0, subaccountIndex: 0 });
+  if (!(await connection().getAccountInfo(new PublicKey(trader)))) {
+    throw new Error(`Phoenix needs a one-time activation for this wallet (it's invite-only). Open ${APP} with this wallet, activate, then try again.`);
+  }
+  const dep = await px.ixs.buildDepositIxs({ authority, amount: BigInt(Math.round(margin * 1e6)) });
+  ixs.push(...dep.instructions.map((ix) => toWeb3(ix as KitIx)));
+  const orderPacket = await px.ixs.orderPackets.buildMarketOrderPacket({ symbol: mkt.symbol, side: long ? Side.Bid : Side.Ask, baseUnits, priceLimitUsd: limit.toFixed(6) });
+  ixs.push(toWeb3((await px.ixs.buildPlaceMarketOrder({ authority, symbol: mkt.symbol as never, orderPacket, traderPdaIndex: 0, traderSubaccountIndex: 0 })) as unknown as KitIx));
+
+  const txs: string[] = [], warnings: string[] = [];
+  const usdc = ctx.tokens.find((t) => t.mint === USDC_MINT)?.amount ?? 0;
+  if (usdc + 1e-6 < margin) {
+    const sol = ctx.tokens.find((t) => t.symbol === "SOL");
+    const need = margin - usdc;
+    const solAmt = sol?.priceUsd ? (need / sol.priceUsd) * 1.015 : 0;
+    if (!sol || solAmt > sol.amount - 0.01) throw new Error(`You need ${num(need, 2)} more USDC for this margin.`);
+    const { best } = await bestQuote(owner, { from: "SOL", to: "USDC", amount: solAmt.toFixed(6), slippage: "auto" }, ctx);
+    txs.push(await best.build());
+    warnings.push(`First swaps ~${num(solAmt, 4)} SOL to USDC for margin; the position opens once that lands.`);
+  }
+  txs.push(await buildTx(owner, ixs, { cuLimit: 800_000 }));
+  const liq = long ? mkt.mark * (1 - 1 / lev + 1 / (2 * mkt.maxLeverage)) : mkt.mark * (1 + 1 / lev - 1 / (2 * mkt.maxLeverage));
+  if (lev >= mkt.maxLeverage * 0.5) warnings.push(`High leverage: a ${pct(1 / lev)} move against you wipes the margin.`);
+  return {
+    txs,
+    summary: `${long ? "Long" : "Short"} ${baseUnits} ${mkt.symbol} (~${usd(margin * lev)}) at ${lev}× on Phoenix with ${usd(margin)} USDC margin. Fills at market up to ${usd(limit)}; est. liquidation ~${usd(liq)}.`,
+    warnings,
+  };
+}
+
 export const phoenixAdapter: Adapter = {
   protocol: "phoenix",
   name: "Phoenix",
+  tools: [{
+    id: "phoenix-perp", protocol: "phoenix", label: "Long / short",
+    description: "Open a leveraged long or short perp on Phoenix (BTC, ETH, SOL, stocks, commodities…) with USDC margin; swaps SOL to USDC first if needed.",
+    fields: [
+      { name: "market", label: "Market", kind: "text", default: "BTC" },
+      { name: "side", label: "Side", kind: "select", default: "long", options: [{ value: "long", label: "Long" }, { value: "short", label: "Short" }] },
+      { name: "collateral", label: "Margin", kind: "amount", unit: "USDC" },
+      { name: "leverage", label: "Leverage", kind: "amount", default: "3" },
+      { name: "slippage", label: "Slippage %", kind: "percent", default: "0.5" },
+    ],
+  }],
+  async buildTool(owner, toolId, params, ctx) {
+    if (toolId !== "phoenix-perp") throw new Error(`Unknown tool ${toolId}`);
+    return openPerp(owner, params, ctx);
+  },
 
   async positions(owner) {
     const state = await getJson<StateSnapshot>(`/v1/trader/state/${owner}`);

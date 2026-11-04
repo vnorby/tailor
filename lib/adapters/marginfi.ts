@@ -19,7 +19,7 @@ import { BorshAccountsCoder, Program, type Idl } from "@coral-xyz/anchor";
 import { uiToNative, wrappedI80F48toBigNumber } from "@mrgnlabs/mrgn-common";
 import bs58 from "bs58";
 import type { Action, Adapter, BuiltAction, Ctx, Leg, Metric, Position, ToolDef } from "@/lib/core/types";
-import { buildTx, connection as sharedConnection, jupHeaders, num, pct, riskFromHealth, usd } from "@/lib/core/solana";
+import { buildTx, connection as sharedConnection, jupHeaders, num, pct, riskFromHealth, usd, jupBase } from "@/lib/core/solana";
 
 const CONFIG = getConfig("production");
 const PROGRAM = CONFIG.programId;
@@ -124,7 +124,7 @@ async function symbols(mints: string[], ctx?: Ctx): Promise<Record<string, strin
   const need = [...new Set(mints)].filter((m) => !symCache.has(m));
   if (need.length) {
     try {
-      const r = await fetch(`https://api.jup.ag/tokens/v2/search?query=${need.slice(0, 100).join(",")}`, { headers: jupHeaders(), cache: "no-store" });
+      const r = await fetch(`${jupBase()}/tokens/v2/search?query=${need.slice(0, 100).join(",")}`, { headers: jupHeaders(), cache: "no-store" });
       if (r.ok) for (const t of (await r.json()) as { id: string; symbol: string }[]) symCache.set(t.id, t.symbol);
     } catch { /* best effort */ }
   }

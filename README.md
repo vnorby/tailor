@@ -1,36 +1,84 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Tailor
 
-## Getting Started
+A generative, self-custodial Solana wallet for Chrome. Instead of one fixed screen, Claude
+builds your wallet around what you actually do: your positions on Kamino, Jupiter, Drift,
+marginfi, Phoenix and more, each with real actions; a look you describe in words; and an
+ask bar that can answer questions, draw views, and build transactions on any protocol.
 
-First, run the development server:
+> **Experimental software. Not audited.** It runs on Solana mainnet with real funds. Use a
+> fresh wallet holding only what you're willing to lose, and read [SECURITY.md](SECURITY.md).
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## How it works
+
+```
+ Chrome extension                 Your local server (this repo)          Services
+ ─────────────────                ─────────────────────────────          ────────
+ seed + keys (encrypted)   ──▶    builds + simulates transactions  ──▶   Solana RPC (Helius)
+ signs locally                    reads positions                        Jupiter, protocol APIs
+ shows every tx for review ◀──    Claude: layout, agent, explainer ──▶   Anthropic API
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **The extension** holds the wallet. The seed is encrypted on your device (PBKDF2 +
+  AES-GCM) and never leaves it. All signing happens in the extension (or on a Ledger).
+- **The server** runs on your machine with **your** API keys. It reads the chain, builds
+  unsigned transactions, simulates them, and runs Claude. It never sees your keys.
+- Nothing is hosted for you: each person runs their own server with their own keys.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Setup
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Requirements: Node 22+, Chrome (or another Chromium browser), an
+[Anthropic API key](https://console.anthropic.com) and a free [Helius](https://helius.dev) key.
 
-## Learn More
+```bash
+git clone <this repo> tailor && cd tailor
+npm install
+cp .env.example .env.local      # then fill in ANTHROPIC_API_KEY and HELIUS_API_KEY
+npm run extension               # builds the extension into extension/dist
+npm run dev                     # starts the server on http://127.0.0.1:3210
+```
 
-To learn more about Next.js, take a look at the following resources:
+Then in Chrome: open `chrome://extensions`, turn on **Developer mode**, click **Load
+unpacked** and pick `extension/dist`. Click the Tailor icon to create or import a wallet.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`npm run dev` checks your keys first and tells you what each missing one would unlock.
+Optional keys (Jupiter, tokens.xyz, Titan, DFlow, MoonPay, Postgres) are described in
+[.env.example](.env.example); everything works without them, with fewer features.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+After pulling changes: `npm run extension`, then click reload on Tailor in
+`chrome://extensions`.
 
-## Deploy on Vercel
+## What gets sent where
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Data | Goes to | When |
+|---|---|---|
+| Your wallet address, balances, positions | Helius, Jupiter, the protocols' APIs | Whenever the wallet loads |
+| Your questions + a summary of your wallet | Anthropic (via your server) | When you ask something, or the home is rebuilt |
+| Transactions to review | Anthropic (explanation + independent check) | When a dApp asks you to sign |
+| Domains of sites that ask to connect | Your server's phishing check | On connect / sign requests |
+| Visible text of the page you're on | Anthropic (via your server) | Only while Tailor is open, if **Page suggestions** is on (Settings) |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Your seed phrase and private keys are never sent anywhere. Pages with a password field are
+never read, and query strings are stripped from URLs.
+
+## Safety model, briefly
+
+- Every transaction, from dApps or from Tailor itself, is simulated and shown with its exact
+  balance changes before you sign. An AI explanation and a separate, independent intent check
+  are added on top; the AI can raise a risk level but never lower the code's warnings.
+- Phishing domains, address poisoning, durable-nonce and owner-change transactions are flagged.
+- The server only listens on `127.0.0.1` and only accepts requests from the Tailor extension
+  (pinned by the fixed ID in `extension/public/manifest.json`) or its own pages. Don't expose
+  it to the internet: it has no user accounts and spends your API credits.
+
+## Development
+
+- `lib/` server logic: `core/` (chain, simulation), `adapters/` (one per protocol, see
+  [ADAPTERS.md](ADAPTERS.md)), `agent/` (the ask-bar agent and its tools), `genui/` (the
+  generated UI kit), `security/`.
+- `extension/` the Chrome extension (Vite, MV3): `background/` vault + dApp bridge, `ui/`.
+- `npm run eval` runs the answer-quality eval in `evals/` against your dev server (costs API
+  credits). Results land in `evals/results/`.
+
+## License
+
+[MIT](LICENSE)

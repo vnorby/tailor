@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 import type { Position, ToolDef } from "@/lib/core/types";
 import type { Card, Fmt, Node, Tone } from "@/lib/genui/spec";
 import { fmt, safeEval, template, type Scope } from "@/lib/genui/expr";
@@ -8,6 +9,9 @@ import { PROTOCOLS } from "@/lib/ui/protocols";
 import { amt, pct, usd } from "@/lib/ui/format";
 import { useActions } from "@/components/ActionSheet";
 import { CodeFrame } from "./CodeFrame";
+import { SwapForm } from "@/components/SwapForm";
+import { PerpForm } from "@/components/PerpForm";
+import { RichText } from "./RichText";
 import { useGenData as useEnv } from "./data";
 
 export { GenProvider } from "./data";
@@ -38,6 +42,8 @@ function N({ n, scope: parent }: { n: Node; scope: Scope }) {
   const env = useEnv();
   const scope = useScope(n as { positionId?: string }, parent);
   const t = (s?: string) => (s ? template(s, scope) : "");
+  // Prose fields: addresses inside become copyable chips that wrap.
+  const rt = (s?: string) => <RichText text={t(s)} />;
   switch (n.type) {
     case "row": return <div className={`flex flex-wrap gap-x-5 gap-y-3 items-center ${n.align === "between" ? "justify-between" : n.align === "end" ? "justify-end" : n.align === "center" ? "justify-center" : ""}`}>{n.children.map((c, i) => <N key={i} n={c} scope={scope} />)}</div>;
     case "stack": return <div className={`flex flex-col ${n.gap === "s" ? "gap-1" : n.gap === "l" ? "gap-4" : "gap-2"}`}>{n.children.map((c, i) => <N key={i} n={c} scope={scope} />)}</div>;
@@ -47,23 +53,33 @@ function N({ n, scope: parent }: { n: Node; scope: Scope }) {
       const size = { xl: "text-[34px] leading-[1.02]", l: "text-[26px] leading-[1.08]", m: "text-[19px] leading-tight", s: "text-[15px] leading-snug" }[n.size ?? "m"];
       return <h3 className={`${n.font === "sans" ? "font-sans font-semibold" : "font-serif"} ${size} text-balance`}>{t(n.text)}</h3>;
     }
-    case "text": return <p className={`${TONE[n.tone ?? "default"]} ${n.size === "s" ? "text-[12.5px]" : n.size === "l" ? "text-[16px]" : "text-[14px]"} leading-snug`}>{t(n.text)}</p>;
+    case "text": return <p className={`${TONE[n.tone ?? "default"]} ${n.size === "s" ? "text-[12.5px]" : n.size === "l" ? "text-[16px]" : "text-[14px]"} leading-snug [overflow-wrap:anywhere]`}>{rt(n.text)}</p>;
     case "eyebrow": {
       const proto = n.protocol ? PROTOCOLS[n.protocol as keyof typeof PROTOCOLS] : undefined;
       // The dot aligns with the first line when the label wraps.
       return <div className="flex items-start gap-1.5 text-[11px] leading-[1.35] uppercase tracking-[0.12em] text-dim">{proto && <span className="mt-[5px] size-1.5 shrink-0 rounded-full" style={{ background: proto.color }} />}<span>{t(n.text)}</span></div>;
     }
     case "pill": return <span className={`inline-block w-fit rounded-md px-2 py-0.5 text-[11.5px] font-semibold ${TONE_BG[n.tone ?? "default"]}`}>{t(n.text)}</span>;
-    case "callout": return <p className={`rounded-lg px-3 py-2 text-[13px] leading-snug ${TONE_BG[n.tone ?? "dim"]}`}>{t(n.text)}</p>;
+    case "callout": return <p className={`rounded-lg px-3 py-2 text-[13px] leading-snug ${TONE_BG[n.tone ?? "dim"]} [overflow-wrap:anywhere]`}>{rt(n.text)}</p>;
     case "divider": return <hr className="border-line" />;
+    case "field": return <Field label={t(n.label)} value={t(n.value)} copy={n.copy !== false} />;
+    case "button": return <ToolBtn n={n} />;
+    case "asset": return <AssetRow mint={n.mint} note={t(n.note)} />;
+    case "qr": return <QR value={t(n.value)} caption={t(n.caption)} />;
+    case "link": {
+      const host = (() => { try { return new URL(n.url).hostname; } catch { return ""; } })();
+      // The destination's domain is always visible, whatever the label says.
+      return <a href={n.url} target="_blank" rel="noopener noreferrer" className="btn w-fit !text-[13px]">{t(n.label)}<span className="text-[11px] text-faint">{host}</span></a>;
+    }
     case "stat": {
       const size = { s: "text-[14px]", m: "text-[18px]", l: "text-[22px]", xl: "text-[40px] font-serif !tracking-normal" }[n.size ?? "m"];
       // Stats never shrink into each other: in a row they wrap to the next line instead.
       return (
         <div className="shrink-0 max-w-full">
           {n.label && <div className="text-[11px] text-faint">{t(n.label)}</div>}
-          <div className={`num ${size} ${TONE[n.tone ?? "default"]} leading-tight whitespace-nowrap`}>{t(n.value)}</div>
-          {n.sub && <div className="text-[12px] text-dim">{t(n.sub)}</div>}
+          {/* A long value (an address) wraps instead of pushing the card wider. */}
+          <div className={`num ${size} ${TONE[n.tone ?? "default"]} leading-tight ${t(n.value).length > 24 ? "[overflow-wrap:anywhere]" : "whitespace-nowrap"}`}>{rt(n.value)}</div>
+          {n.sub && <div className="text-[12px] text-dim [overflow-wrap:anywhere]">{rt(n.sub)}</div>}
         </div>
       );
     }
@@ -91,7 +107,7 @@ function N({ n, scope: parent }: { n: Node; scope: Scope }) {
       <div className="overflow-x-auto -mx-1">
         <table className="w-full text-[12.5px]">
           <thead><tr>{n.columns.map((c, i) => <th key={i} className={`px-1 pb-1.5 font-normal text-faint ${i ? "text-right" : "text-left"}`}>{t(c)}</th>)}</tr></thead>
-          <tbody className="divide-y divide-line">{n.rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className={`px-1 py-1.5 ${j ? "text-right num" : ""}`}>{t(c)}</td>)}</tr>)}</tbody>
+          <tbody className="divide-y divide-line">{n.rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className={`px-1 py-1.5 [overflow-wrap:anywhere] ${j ? "text-right num" : ""}`}>{rt(c)}</td>)}</tr>)}</tbody>
         </table>
       </div>
     );
@@ -104,7 +120,8 @@ function N({ n, scope: parent }: { n: Node; scope: Scope }) {
 
 function Gauge({ n, scope }: { n: Extract<Node, { type: "gauge" }>; scope: Scope }) {
   const v = safeEval(n.value, scope), max = safeEval(n.max, scope), warn = safeEval(n.warnAt, scope), danger = safeEval(n.dangerAt, scope);
-  const f = (n.format ?? "num") as Fmt;
+  // "pct" expects fractions (0.8 → 80%); a gauge whose max is above 1.5 was written in percent units (80 of 92).
+  const f = (n.format === "pct" && max > 1.5 ? "pct100" : n.format ?? "num") as Fmt;
   const pctOf = (x: number) => (isFinite(x) && max > 0 ? Math.min(100, Math.max(0, (x / max) * 100)) : 0);
   // Higher = worse when the danger mark sits above the warn mark (LTV); otherwise lower = worse (health).
   const rising = !isFinite(warn) || !isFinite(danger) || danger >= warn;
@@ -214,6 +231,63 @@ function Tokens({ limit }: { limit?: number }) {
   );
 }
 
+interface AssetInfo { mint: string; symbol: string; name: string; icon?: string; price?: number; change24h?: number; registered: boolean; verified: boolean }
+const assetCache = new Map<string, Promise<AssetInfo | null>>();
+
+/** Any token the AI mentions: what it is, its price, whether it's vetted, and one tap to buy. */
+function AssetRow({ mint, note }: { mint: string; note?: string }) {
+  const { tools, snap } = useEnv();
+  const { open, apiBase } = useActions();
+  const [a, setA] = useState<AssetInfo | null | undefined>(undefined);
+  useEffect(() => {
+    if (!assetCache.has(mint)) assetCache.set(mint, fetch(`${apiBase}/api/token?mint=${mint}`).then((r) => (r.ok ? r.json() : null)).catch(() => null));
+    let live = true;
+    void assetCache.get(mint)!.then((x) => live && setA(x));
+    return () => { live = false; };
+  }, [mint, apiBase]);
+  const swap = tools.find((x) => x.id === "swap");
+  const held = snap.tokens.find((x) => x.mint === mint)?.amount;
+  const usdc = snap.tokens.find((x) => x.symbol === "USDC")?.valueUsd ?? 0;
+  const vetted = !!a && (a.registered || a.verified);
+  if (a === undefined) return <div className="h-10 rounded-lg bg-panel-2 animate-pulse" />;
+  if (!a) return null;
+  return (
+    <div className="flex items-center gap-2.5">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {a.icon ? <img src={a.icon} alt="" className="size-8 rounded-full bg-panel-2 shrink-0" /> : <span className="size-8 rounded-full bg-panel-2 shrink-0" />}
+      <span className="flex-1 min-w-0">
+        <span className="flex items-center gap-1 text-[13.5px] font-medium">{a.symbol}
+          {a.registered ? <span title="Registered on tokens.xyz" className="inline-flex size-[14px] items-center justify-center rounded-full bg-tape text-on-tape text-[8.5px] font-bold">✓</span>
+            : a.verified ? <span className="text-[11px] text-dim">✓</span> : <span className="rounded px-1 text-[10px] font-semibold bg-warn/15 text-warn">Unverified</span>}
+        </span>
+        <span className="block text-[11.5px] text-dim truncate">{held ? `You hold ${amt(held)}` : note || a.name}</span>
+      </span>
+      {a.price != null && (
+        <span className="text-right shrink-0">
+          <span className="block num text-[12.5px]">{a.price < 1 ? `$${a.price.toPrecision(3)}` : usd(a.price)}</span>
+          {a.change24h != null && <span className={`block num text-[10.5px] ${a.change24h >= 0 ? "text-pos" : "text-danger"}`}>{a.change24h >= 0 ? "+" : ""}{a.change24h.toFixed(1)}%</span>}
+        </span>
+      )}
+      {swap && vetted && <button className="btn btn-primary !py-1 !px-3 !text-[12px] shrink-0" onClick={() => open({ kind: "tool", tool: swap, params: { from: usdc >= 5 ? "USDC" : "SOL", to: mint }, form: true })}>Buy</button>}
+    </div>
+  );
+}
+
+function ToolBtn({ n }: { n: Extract<Node, { type: "button" }> }) {
+  const { tools } = useEnv();
+  const { open } = useActions();
+  const tool = tools.find((t) => t.id === n.toolId);
+  if (!tool) return null;
+  const params = Object.fromEntries((n.params ?? []).map((x) => [x.name, x.value]));
+  const go = () => open({ kind: "tool", tool, params, form: true });
+  // With a subtitle it's a full-width row (lists of next steps / options); without, a plain button.
+  return n.sub
+    ? <button className="w-full flex items-center gap-3 rounded-lg bg-panel-2 hover:bg-line px-3 py-2.5 text-left transition-colors" onClick={go}>
+        <span className="flex-1 min-w-0"><span className="block text-[14px] font-medium truncate">{n.label}</span><span className="block text-[12px] text-dim truncate">{n.sub}</span></span><span className="text-faint">›</span>
+      </button>
+    : <button className={`btn ${n.variant === "primary" ? "btn-primary" : ""}`} onClick={go}>{n.label}</button>;
+}
+
 function ActionBtn({ n }: { n: Extract<Node, { type: "action" }> }) {
   const { snap } = useEnv();
   const { open } = useActions();
@@ -258,8 +332,10 @@ function WhatIf({ n, scope }: { n: Extract<Node, { type: "whatif" }>; scope: Sco
 }
 
 function ToolForm({ tool, defaults }: { tool: ToolDef; defaults?: { name: string; value: string }[] }) {
-  const { open } = useActions();
+  const { open, apiBase, owner } = useActions();
   const [params, setParams] = useState<Record<string, string>>(() => Object.fromEntries(tool.fields.map((f) => [f.name, defaults?.find((d) => d.name === f.name)?.value ?? f.default ?? ""])));
+  if (tool.id === "swap") return <SwapForm apiBase={apiBase} owner={owner} params={params} onChange={setParams} onSubmit={() => open({ kind: "tool", tool, params })} />;
+  if (tool.id === "phoenix-perp") return <PerpForm apiBase={apiBase} owner={owner} params={params} onChange={setParams} onSubmit={() => open({ kind: "tool", tool, params })} />;
   return (
     <form className="flex flex-col gap-2.5" onSubmit={(e) => { e.preventDefault(); open({ kind: "tool", tool, params }); }}>
       <div className="grid grid-cols-2 gap-2.5">
@@ -278,5 +354,36 @@ function ToolForm({ tool, defaults }: { tool: ToolDef; defaults?: { name: string
       </div>
       <button className="btn btn-primary justify-center" type="submit">{tool.label}</button>
     </form>
+  );
+}
+
+/** A value the user will reuse: shown in full (never truncated, so what you see is what you copy) with one-tap copy. */
+function Field({ label, value, copy }: { label?: string; value: string; copy: boolean }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex flex-col gap-1">
+      {label && <div className="text-[11px] text-faint">{label}</div>}
+      <div className="flex items-center gap-2 rounded-lg bg-panel-2 pl-3 pr-1.5 py-1.5">
+        <span className="num flex-1 min-w-0 text-[13px] leading-snug [overflow-wrap:anywhere] select-all">{value}</span>
+        {copy && (
+          <button type="button" className={`btn !py-1 !px-2.5 !text-[12px] shrink-0 ${copied ? "!text-pos" : ""}`}
+            onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
+            {copied ? "Copied" : "Copy"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function QR({ value, caption }: { value: string; caption?: string }) {
+  const [src, setSrc] = useState("");
+  useEffect(() => { void QRCode.toDataURL(value, { margin: 1, width: 360, color: { dark: "#000000", light: "#ffffff" } }).then(setSrc).catch(() => setSrc("")); }, [value]);
+  return (
+    <figure className="flex flex-col items-center gap-1.5">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {src ? <img src={src} alt={caption || "QR code"} width={168} height={168} className="rounded-lg" /> : <div className="size-[168px] rounded-lg bg-panel-2" />}
+      {caption && <figcaption className="text-[11.5px] text-dim text-center">{caption}</figcaption>}
+    </figure>
   );
 }

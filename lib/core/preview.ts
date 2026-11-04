@@ -10,6 +10,7 @@ import {
   type AddressLookupTableAccount, type MessageAccountKeys, type VersionedMessage,
 } from "@solana/web3.js";
 import { connection, jupHeaders, prices, rpcUrl, SOL_MINT } from "./solana";
+import { jupBase } from "@/lib/core/solana";
 
 export interface PreviewChange {
   mint: string; symbol: string; name?: string; icon?: string; decimals: number;
@@ -218,7 +219,7 @@ async function tokenMeta(mints: string[]): Promise<Map<string, TokenMeta>> {
   const need = [...new Set(mints)].filter((m) => m !== SOL_MINT && !metaCache.has(m));
   for (let i = 0; i < need.length; i += 100) {
     try {
-      const r = await fetch(`https://api.jup.ag/tokens/v2/search?query=${need.slice(i, i + 100).join(",")}`, { headers: jupHeaders(), cache: "no-store", signal: AbortSignal.timeout(5000) });
+      const r = await fetch(`${jupBase()}/tokens/v2/search?query=${need.slice(i, i + 100).join(",")}`, { headers: jupHeaders(), cache: "no-store", signal: AbortSignal.timeout(5000) });
       if (!r.ok) continue;
       for (const m of (await r.json()) as { id: string; symbol?: string; name?: string; icon?: string; decimals?: number }[]) {
         if (m.id) metaCache.set(m.id, { symbol: m.symbol || m.id.slice(0, 4), name: m.name, icon: m.icon, decimals: m.decimals });

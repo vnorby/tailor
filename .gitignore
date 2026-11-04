@@ -41,3 +41,12 @@ yarn-error.log*
 next-env.d.ts
 extension/node_modules
 extension/dist
+
+# local tooling and outputs
+/.agents
+/.claude
+skills-lock.json
+/.agent-test.mts
+/evals/results
+!.env.example
+vercel.json

@@ -5,7 +5,7 @@ import type { Executor } from "@/components/ActionSheet";
 import "./styles.css";
 import { watchTheme } from "./theme";
 import { passkeyRecord, unlockWithPasskey } from "./passkey";
-import { Fingerprint } from "@phosphor-icons/react";
+import { Check, Copy, Fingerprint } from "@phosphor-icons/react";
 
 export function mount(node: ReactNode) {
   watchTheme();
@@ -78,7 +78,7 @@ export function AccountSwitcher({ state, active, onChanged }: { state: WalletSta
   const [err, setErr] = useState<string | null>(null);
   const act = async (fn: () => Promise<unknown>) => { setErr(null); try { await fn(); setMode(null); setVal(""); setOpen(false); onChanged(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } };
   return (
-    <div className="relative">
+    <div className="relative flex items-center">
       <button className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-panel-2" onClick={() => setOpen((o) => !o)}>
         <span className="size-6 rounded-full bg-tape text-on-tape text-[12px] font-semibold flex items-center justify-center">{active?.name.slice(0, 1) ?? "?"}</span>
         <span className="text-left leading-tight">
@@ -87,8 +87,9 @@ export function AccountSwitcher({ state, active, onChanged }: { state: WalletSta
         </span>
         <span className="text-faint text-[10px]">▾</span>
       </button>
+      {active && <CopyAddress address={active.address} />}
       {open && (
-        <div className="absolute left-0 z-40 mt-1 w-72 card p-1.5 shadow-2xl">
+        <div className="absolute left-0 top-full z-40 mt-1 w-[min(18rem,calc(100vw-1.5rem))] max-h-[calc(100vh-4.5rem)] overflow-y-auto card p-1.5 shadow-2xl">
           {state.accounts.map((a) => (
             <button key={a.id} className={`w-full flex items-center justify-between gap-2 rounded-lg px-2 py-2 text-left hover:bg-panel-2 ${a.id === state.activeId ? "bg-panel-2" : ""}`} onClick={() => act(() => call({ type: "setActive", id: a.id }))}>
               <span className="text-[13px]">{a.name}{a.kind !== "derived" && <span className="ml-1 text-[10px] text-faint">{a.kind === "ledger" ? "Ledger" : a.kind}</span>}</span>
@@ -113,5 +114,19 @@ export function AccountSwitcher({ state, active, onChanged }: { state: WalletSta
         </div>
       )}
     </div>
+  );
+}
+
+/** One tap copies the active address; the icon confirms. */
+function CopyAddress({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className={`ml-0.5 flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] hover:bg-panel-2 ${copied ? "text-pos" : "text-faint hover:text-chalk"}`}
+      title="Copy address" aria-label="Copy address"
+      onClick={() => { void navigator.clipboard.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+    >
+      {copied ? <><Check size={13} weight="bold" />Copied</> : <Copy size={13} weight="bold" />}
+    </button>
   );
 }

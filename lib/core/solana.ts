@@ -45,7 +45,7 @@ export async function prices(mints: string[]): Promise<Record<string, number>> {
   for (let i = 0; i < need.length; i += 50) {
     const ids = need.slice(i, i + 50).join(",");
     try {
-      const r = await fetch(`https://api.jup.ag/price/v3?ids=${ids}`, { headers: jupHeaders(), cache: "no-store" });
+      const r = await fetch(`${jupBase()}/price/v3?ids=${ids}`, { headers: jupHeaders(), cache: "no-store" });
       if (!r.ok) continue;
       const j = (await r.json()) as Record<string, { usdPrice?: number } | null>;
       for (const [m, v] of Object.entries(j)) if (v?.usdPrice) { out[m] = v.usdPrice; priceCache.set(m, { usd: v.usdPrice, at: Date.now() }); }
@@ -55,6 +55,8 @@ export async function prices(mints: string[]): Promise<Record<string, number>> {
 }
 
 export const jupHeaders = (): Record<string, string> => (process.env.JUPITER_API_KEY ? { "x-api-key": process.env.JUPITER_API_KEY } : {});
+/** Jupiter with a key (higher limits) or its free keyless host. */
+export const jupBase = () => (process.env.JUPITER_API_KEY ? "https://api.jup.ag" : "https://lite-api.jup.ag");
 
 // ---------- balances ----------
 
@@ -111,7 +113,7 @@ export async function jupVerified(mints: string[]): Promise<Set<string>> {
   for (let i = 0; i < need.length && i < 300; i += 100) {
     const chunk = need.slice(i, i + 100);
     try {
-      const r = await fetch(`https://api.jup.ag/tokens/v2/search?query=${chunk.join(",")}`, { headers: jupHeaders(), cache: "no-store", signal: AbortSignal.timeout(5000) });
+      const r = await fetch(`${jupBase()}/tokens/v2/search?query=${chunk.join(",")}`, { headers: jupHeaders(), cache: "no-store", signal: AbortSignal.timeout(5000) });
       if (!r.ok) continue;
       const seen = new Set<string>();
       for (const m of (await r.json()) as { id: string; isVerified?: boolean; tags?: string[] }[]) {
@@ -149,7 +151,7 @@ async function rpcTokens(owner: string): Promise<Token[]> {
   const list = [...byMint.values()];
   for (let i = 0; i < list.length; i += 100) {
     try {
-      const r = await fetch(`https://api.jup.ag/tokens/v2/search?query=${list.slice(i, i + 100).map((t) => t.mint).join(",")}`, { headers: jupHeaders(), cache: "no-store" });
+      const r = await fetch(`${jupBase()}/tokens/v2/search?query=${list.slice(i, i + 100).map((t) => t.mint).join(",")}`, { headers: jupHeaders(), cache: "no-store" });
       if (!r.ok) continue;
       for (const m of (await r.json()) as { id: string; symbol?: string; name?: string; icon?: string }[]) {
         const t = byMint.get(m.id);

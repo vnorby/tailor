@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { AccountMeta, WalletState } from "~/shared/messages";
 import { AccountSwitcher, Logo, mount, Unlock, useWalletState } from "../common";
 import { Home } from "../home/Home";
@@ -10,13 +11,14 @@ function Panel() {
   );
   if (!state.unlocked) return <Center><Unlock onUnlocked={() => void refresh()} /></Center>;
   if (!active) return null;
-  return <Home key={active.id} state={state} active={active} header={<Header state={state} active={active} refresh={refresh} />} />;
+  return <Home key={active.id} state={state} active={active} header={(balance) => <Header state={state} active={active} refresh={refresh} balance={balance} />} />;
 }
 
-function Header({ state, active, refresh }: { state: WalletState; active: AccountMeta; refresh(): Promise<void> }) {
+function Header({ state, active, refresh, balance }: { state: WalletState; active: AccountMeta; refresh(): Promise<void>; balance: ReactNode }) {
   return (
     <header className="sticky top-0 z-20 flex items-center justify-between px-3 py-2.5 bg-cloth/90 backdrop-blur">
       <AccountSwitcher state={state} active={active} onChanged={() => void refresh()} />
+      {balance}
     </header>
   );
 }

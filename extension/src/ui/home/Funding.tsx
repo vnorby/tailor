@@ -5,7 +5,6 @@ import { call } from "~/shared/messages";
 
 type Panel = null | "exchange" | "card" | "bridge" | "request" | "import";
 
-const EXCHANGES = ["Coinbase", "Binance", "Kraken", "OKX", "Bybit"];
 const BRIDGES = [
   { name: "Mayan", url: "https://swap.mayan.finance/" },
   { name: "deBridge", url: "https://app.debridge.finance/?outputChain=7565164" },
@@ -21,8 +20,8 @@ export function Funding({ address, apiBase, compact }: { address: string; apiBas
     { id: "exchange", icon: <Bank size={18} weight="fill" />, title: "From an exchange", sub: "Coinbase, Binance, Kraken…" },
     { id: "card", icon: <CreditCard size={18} weight="fill" />, title: "Buy with card", sub: providers.map((p) => p.name).join(", "), hidden: !providers.length },
     { id: "bridge", icon: <ArrowsLeftRight size={18} weight="bold" />, title: "From another chain", sub: "Ethereum, Base, Arbitrum, BTC…" },
-    { id: "request", icon: <QrCode size={18} weight="fill" />, title: "Request from someone", sub: "Share a Solana Pay link" },
-    { id: "import", icon: <Key size={18} weight="fill" />, title: "Bring a wallet you have", sub: "Import a private key" },
+    { id: "request", icon: <QrCode size={18} weight="fill" />, title: "Request from someone", sub: "Solana Pay link" },
+    { id: "import", icon: <Key size={18} weight="fill" />, title: "Import a wallet", sub: "Private key" },
   ];
 
   if (panel) return (
@@ -38,8 +37,8 @@ export function Funding({ address, apiBase, compact }: { address: string; apiBas
 
   return (
     <section className={`px-4 ${compact ? "mt-4" : "mt-6"} rise`}>
-      <h2 className="font-serif text-[26px] leading-tight px-1">Add funds to get started</h2>
-      <p className="px-1 mt-1 text-[13px] text-dim">Your wallet is empty. Pick how you&apos;d like to bring money in.</p>
+      <h2 className="font-serif text-[26px] leading-tight px-1">Add funds</h2>
+      <p className="px-1 mt-1 text-[13px] text-dim">Your wallet is empty.</p>
       <ul className="mt-3 card overflow-hidden divide-y divide-line">
         {options.filter((o) => !o.hidden).map((o) => (
           <li key={o.id}>
@@ -51,7 +50,7 @@ export function Funding({ address, apiBase, compact }: { address: string; apiBas
           </li>
         ))}
       </ul>
-      <p className="mt-3 px-1 text-[11.5px] text-faint">We&apos;ll notice the deposit and set up your wallet as soon as it lands.</p>
+      <p className="mt-3 px-1 text-[11.5px] text-faint">Your wallet sets itself up when funds land.</p>
     </section>
   );
 }
@@ -79,12 +78,12 @@ function Exchange({ address }: { address: string }) {
     <div className="flex flex-col gap-3">
       <h3 className="text-[16px] font-medium">Withdraw from an exchange</h3>
       <ol className="text-[13px] text-chalk/85 flex flex-col gap-1.5 list-decimal pl-5">
-        <li>In {EXCHANGES.slice(0, 3).join(", ")} or similar, choose Withdraw.</li>
-        <li>Pick <b>SOL</b> or <b>USDC</b>, and the <b>Solana</b> network.</li>
-        <li>Paste this address and confirm.</li>
+        <li>On the exchange, tap Withdraw.</li>
+        <li>Pick <b>SOL</b> or <b>USDC</b> on <b>Solana</b>.</li>
+        <li>Paste this address.</li>
       </ol>
       <AddressBox address={address} />
-      <p className="text-[11.5px] text-warn">Only send on the Solana network. Funds sent on another network can be lost.</p>
+      <p className="text-[11.5px] text-warn">Solana network only. Other networks can lose funds.</p>
     </div>
   );
 }
@@ -99,7 +98,7 @@ function Card({ address, apiBase, providers }: { address: string; apiBase: strin
   return (
     <div className="flex flex-col gap-3">
       <h3 className="text-[16px] font-medium">Buy with card</h3>
-      <p className="text-[13px] text-dim">Opens the provider with your address filled in. SOL arrives here when the purchase completes.</p>
+      <p className="text-[13px] text-dim">Your address is filled in for you.</p>
       {providers.map((p) => <button key={p.id} className="btn btn-primary justify-center !py-2.5" onClick={() => open(p.id)}>Continue with {p.name}</button>)}
       {err && <p className="text-[12.5px] text-danger">{err}</p>}
     </div>
@@ -111,13 +110,13 @@ function Bridge({ address }: { address: string }) {
   return (
     <div className="flex flex-col gap-3">
       <h3 className="text-[16px] font-medium">Bridge from another chain</h3>
-      <p className="text-[13px] text-dim">Your address is copied when you open a bridge. Choose Solana as the destination and paste it as the recipient.</p>
+      <p className="text-[13px] text-dim">We copy your address. Pick Solana, paste it as recipient.</p>
       {BRIDGES.map((b) => (
         <button key={b.name} className="btn justify-between !py-2.5" onClick={() => { copy(address); void chrome.tabs.create({ url: b.url }); }}>
           <span>Open {b.name}</span><CaretRight size={14} />
         </button>
       ))}
-      {copied && <p className="text-[12px] text-pos">Address copied. Paste it as the recipient.</p>}
+      {copied && <p className="text-[12px] text-pos">Copied. Paste as recipient.</p>}
     </div>
   );
 }
@@ -130,7 +129,7 @@ function Request({ address }: { address: string }) {
   return (
     <div className="flex flex-col gap-3">
       <h3 className="text-[16px] font-medium">Request SOL</h3>
-      <p className="text-[13px] text-dim">Anyone with a Solana wallet can scan this or open the link.</p>
+      <p className="text-[13px] text-dim">Any Solana wallet can scan or open this.</p>
       <label className="flex flex-col gap-1 text-[12px] text-dim">Amount (optional)
         <div className="relative"><input className="input num" inputMode="decimal" placeholder="0.5" value={amount} onChange={(e) => setAmount(e.target.value)} /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-faint text-[12px]">SOL</span></div>
       </label>
@@ -149,8 +148,8 @@ function Import() {
       e.preventDefault(); setBusy(true); setErr(null);
       try { await call({ type: "importKey", privateKey: key.trim() }); } catch (x) { setErr(x instanceof Error ? x.message : String(x)); setBusy(false); }
     }}>
-      <h3 className="text-[16px] font-medium">Bring a wallet you already have</h3>
-      <p className="text-[13px] text-dim">Paste a private key exported from Phantom, Solflare or Backpack. It&apos;s added as another account and encrypted on this device.</p>
+      <h3 className="text-[16px] font-medium">Import a wallet</h3>
+      <p className="text-[13px] text-dim">Paste a private key from Phantom, Solflare or Backpack. Encrypted on this device.</p>
       <input className="input num !text-[12px]" type="password" placeholder="Private key (base58)" value={key} onChange={(e) => setKey(e.target.value)} />
       {err && <p className="text-[12.5px] text-danger">{err}</p>}
       <button className="btn btn-primary justify-center" disabled={!key.trim() || busy}>{busy ? "Importing…" : "Import"}</button>

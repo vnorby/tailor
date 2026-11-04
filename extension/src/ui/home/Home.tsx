@@ -1,19 +1,21 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
 import {
-  ArrowDown, ArrowUp, ArrowsLeftRight, ArrowCounterClockwise, Broom, Coins, Bank, Plus, X, CheckCircle, CaretDown, Copy, Warning,
+  ArrowDown, ArrowUp, ArrowsLeftRight, ArrowCounterClockwise, Broom, Coins, Bank, Plus, X, CheckCircle, CaretDown, Copy, Warning, DotsThree, PushPin,
 } from "@phosphor-icons/react";
 import type { AccountMeta, WalletState } from "~/shared/messages";
 import type { Position, ToolDef } from "@/lib/core/types";
 import type { Section } from "@/lib/genui/home";
 import { ActionProvider, useActions } from "@/components/ActionSheet";
 import { GenCard, GenProvider } from "@/components/genui/Render";
+import { RichText } from "@/components/genui/RichText";
 import { defaultCard } from "@/lib/genui/cards";
 import { PROTOCOLS } from "@/lib/ui/protocols";
 import { amt, usd } from "@/lib/ui/format";
 import { extensionExecutor } from "../common";
 import { useHome, type Note } from "./useHome";
 import { Funding } from "./Funding";
+import { PageSuggestions, SiteContext, useActiveSite, usePageSuggestions } from "./Site";
 
 const ICONS: Record<string, ReactNode> = {
   fund: <Plus size={18} weight="bold" />,
@@ -23,7 +25,10 @@ const ICONS: Record<string, ReactNode> = {
 };
 const LABELS: Record<string, string> = { fund: "Add funds", send: "Send", receive: "Receive", swap: "Swap", "stake-sol": "Stake", "stake-native": "Stake", "kamino-deposit": "Earn", "marginfi-deposit": "Lend", "close-empty-accounts": "Clean up" };
 
-export function Home({ state, active, header, compact }: { state: WalletState; active: AccountMeta; header: ReactNode; compact?: boolean }) {
+/** header receives the balance so each surface can place it in its own top bar. */
+type HeaderSlot = ReactNode | ((balance: ReactNode) => ReactNode);
+
+export function Home({ state, active, header, compact }: { state: WalletState; active: AccountMeta; header: HeaderSlot; compact?: boolean }) {
   const h = useHome(state.apiBase, active.address);
   return (
     <ActionProvider executor={extensionExecutor(state, active)} onDone={() => void h.run({ fresh: true })}>
@@ -32,7 +37,7 @@ export function Home({ state, active, header, compact }: { state: WalletState; a
   );
 }
 
-function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<typeof useHome>; header: ReactNode; compact?: boolean; watch: boolean; address: string; apiBase: string }) {
+function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<typeof useHome>; header: HeaderSlot; compact?: boolean; watch: boolean; address: string; apiBase: string }) {
   const { open } = useActions();
   const [detail, setDetail] = useState<string | null>(null);
   const [receive, setReceive] = useState(false);
@@ -40,6 +45,8 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
   const [arrived, setArrived] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const snap = h.snap;
+  // Switching accounts keeps this view mounted (no flash); drop what belonged to the last one.
+  useEffect(() => { setDetail(null); setReceive(false); setFund(false); setArrived(null); setPrompt(""); }, [address]);
 
   // A request like "send 1 SOL to …" comes back as an intent: open it right away, prefilled.
   useEffect(() => {
@@ -53,18 +60,33 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
   const solBal = snap?.tokens.find((t) => t.mint === "So11111111111111111111111111111111111111112")?.amount ?? 0;
   const lowSol = !!snap && !empty && solBal < 0.003 && !watch;
 
-  // While empty, watch for the first deposit and rebuild the home when it lands.
+  // Watch balances while open: when tokens arrive (or leave), refresh the home and say what came in.
+  const run = h.run;
   useEffect(() => {
-    if (!empty) return;
-    const id = setInterval(async () => {
+    let base: Map<string, number> | null = null, stop = false;
+    const tick = async () => {
       try {
         const r = await fetch(`${apiBase}/api/balance?owner=${address}`);
-        const j = await r.json();
-        if (r.ok && j.totalUsd >= 0.5) { clearInterval(id); setArrived(`Funds arrived: $${j.totalUsd.toFixed(2)}`); setFund(false); void h.run({ fresh: true }); }
+        const j = (await r.json()) as { tokens?: { mint: string; symbol: string; amount: number; priceUsd?: number }[] };
+        if (stop || !r.ok || !j.tokens) return;
+        const now = new Map(j.tokens.map((t) => [t.mint, t.amount]));
+        if (base) {
+          const ins = j.tokens.filter((t) => t.amount - (base!.get(t.mint) ?? 0) > Math.max(1e-9, (base!.get(t.mint) ?? 0) * 1e-4) && (t.amount - (base!.get(t.mint) ?? 0)) * (t.priceUsd ?? 1) >= 0.05);
+          const changed = ins.length || [...base].some(([m, a]) => Math.abs((now.get(m) ?? 0) - a) > Math.max(1e-9, a * 1e-4));
+          if (changed) {
+            if (ins.length) setArrived(`Received ${ins.slice(0, 2).map((t) => `${amt(t.amount - (base!.get(t.mint) ?? 0))} ${t.symbol}`).join(" and ")}`);
+            setFund(false);
+            void run({ fresh: true });
+          }
+        }
+        base = now;
       } catch { /* try again next tick */ }
-    }, 10_000);
-    return () => clearInterval(id);
-  }, [empty, apiBase, address, h]);
+    };
+    void tick();
+    const id = setInterval(tick, 12_000);
+    return () => { stop = true; clearInterval(id); };
+  }, [apiBase, address, run]);
+  useEffect(() => { if (!arrived) return; const id = setTimeout(() => setArrived(null), 8000); return () => clearTimeout(id); }, [arrived]);
 
   const runAction = (ref: string) => {
     if (ref === "receive") return setReceive(true);
@@ -85,7 +107,66 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
   const defiUsd = snap ? snap.netWorthUsd - walletUsd : 0;
   const detailPos = detail && snap ? snap.positions.find((p) => p.id === detail) : undefined;
 
-  const ask = (t: string) => { setPrompt(""); void h.ask(t); };
+  const site = useActiveSite();
+  // Quick moves, by context: funding first when empty or out of fee SOL, this site's moves next, then the home's picks.
+  const quick = [...new Set([...(empty || lowSol ? ["fund"] : []), ...(site?.tools ?? []).filter((t) => h.tools.some((x) => x.id === t)), ...h.actions, "receive"])].slice(0, 5);
+  const suggestions = usePageSuggestions(apiBase, address, site);
+  const swapTool = h.tools.find((t) => t.id === "swap");
+  const usdcHeld = snap?.tokens.find((t) => t.symbol === "USDC")?.valueUsd ?? 0;
+  const ask = (t: string) => {
+    setPrompt("");
+    // "long btc", "short eth 5x $50": open the trade form instantly; no need to wait on the agent.
+    const perp = parsePerp(t), tool = perp && h.tools.find((x) => x.id === "phoenix-perp");
+    if (perp && tool) { open({ kind: "tool", tool, params: { ...perp, slippage: "0.5" }, form: true }); return; }
+    void h.ask(t, site?.host);
+  };
+  const asking = !!h.answer && !h.answer.done;
+
+  // Keep the eye where the work is: follow the answer and each module as it appears, until the user scrolls themselves.
+  const scroller = useRef<HTMLDivElement>(null);
+  const answerRef = useRef<HTMLDivElement>(null);
+  const [flash, setFlash] = useState<number[]>([]);
+  const following = useRef(false);
+  const scrollToEl = (el: Element | null | undefined, offset = 72) => {
+    const box = scroller.current;
+    if (!box || !el) return;
+    const top = box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top - offset;
+    const from = box.scrollTop;
+    box.scrollTo({ top, behavior: "smooth" });
+    // Some contexts skip smooth scrolling entirely; land there anyway.
+    setTimeout(() => { if (box.scrollTop === from) box.scrollTop = top; }, 700);
+  };
+  useEffect(() => {
+    if (!asking) return;
+    following.current = true;
+    const stop = () => { following.current = false; };
+    const box = scroller.current;
+    box?.addEventListener("wheel", stop, { passive: true }); box?.addEventListener("touchmove", stop, { passive: true });
+    requestAnimationFrame(() => scrollToEl(answerRef.current, 12));
+    return () => { box?.removeEventListener("wheel", stop); box?.removeEventListener("touchmove", stop); };
+  }, [asking]);
+  const showChanged = (idx: number[]) => {
+    if (!idx.length) return;
+    setFlash(idx);
+    setTimeout(() => scrollToEl(scroller.current?.querySelector(`[data-section="${idx.at(-1)}"]`)), 150);
+    setTimeout(() => setFlash([]), 2400);
+  };
+  // Each new card in the answer, and each new home module, is brought into view as it lands.
+  const cardCount = h.answer?.cards.length ?? 0;
+  useEffect(() => {
+    if (cardCount && following.current) setTimeout(() => scrollToEl(answerRef.current?.querySelector(`[data-card="${cardCount - 1}"]`), 24), 60);
+  }, [cardCount]);
+  const changedKey = h.answer?.changed?.join(",");
+  useEffect(() => {
+    if (changedKey && (following.current || h.answer?.done)) showChanged(h.answer?.changed ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changedKey]);
+
+  // Hand edits: remove (with undo), move to top, pin from an answer.
+  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null);
+  useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 5000); return () => clearTimeout(id); }, [toast]);
+  const remove = (i: number) => { const undo = h.removeSection(i); setToast({ text: "Removed", undo }); };
+  const pinCard = (c: import("@/lib/genui/spec").Card) => { const i = h.pin(c); setToast({ text: "Pinned to home" }); showChanged([i]); };
 
   // A transaction the agent built opens straight into review (simulation + balance changes).
   useEffect(() => {
@@ -96,27 +177,18 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
 
   return (
     <div className={`flex flex-col ${compact ? "h-[600px] w-[360px] overflow-hidden" : "min-h-screen"}`}>
-      {header}
-      <div className={`flex-1 overflow-y-auto ${compact ? "pb-20" : "pb-28"}`}>
-        {/* Balance */}
-        <section className="px-5 pt-5 pb-4 text-center">
-          <div className="font-serif text-[46px] leading-none tracking-tight min-h-[46px]">{snap ? usd(snap.netWorthUsd) : <span className="inline-block h-10 w-40 rounded-lg bg-panel animate-pulse" />}</div>
-          {snap && defiUsd > 1 && <div className="mt-2 text-[12.5px] text-dim num">{usd(walletUsd, true)} wallet · {usd(defiUsd, true)} in DeFi</div>}
-          {watch && <div className="mt-2 text-[11.5px] text-faint">Watch-only</div>}
-        </section>
+      {typeof header === "function" ? header(<Balance total={snap?.netWorthUsd} wallet={walletUsd} defi={defiUsd} />) : header}
+      <div ref={scroller} className={`flex-1 overflow-y-auto ${compact ? "pb-28" : "pb-32"}`}>
 
-        {/* Actions */}
-        <section className="px-4 flex justify-center gap-3">
-          {h.actions.slice(0, compact ? 4 : 5).map((ref) => (
-            <button key={ref} className="group flex flex-col items-center gap-1.5 w-[60px] disabled:opacity-40" disabled={watch && ref !== "receive"} onClick={() => runAction(ref)}>
-              <span className="size-11 rounded-full bg-tape text-on-tape flex items-center justify-center transition-transform group-hover:scale-105 group-active:scale-95">{iconFor(ref)}</span>
-              <span className="text-[11.5px] text-dim truncate max-w-full">{labelFor(ref)}</span>
-            </button>
-          ))}
-        </section>
+        {/* Where the user is: what matters on this site */}
+        {site && snap && !empty && <SiteContext site={site} apiBase={apiBase} positions={snap.positions} tools={h.tools} onOpenPosition={setDetail} onTool={(t) => open({ kind: "tool", tool: t, params: {}, form: true })} />}
+
+        {snap && !watch && <PageSuggestions state={suggestions} swap={swapTool}
+          onBuy={(s) => swapTool && open({ kind: "tool", tool: swapTool, params: { from: usdcHeld >= 5 ? "USDC" : "SOL", to: s.mint }, form: true })}
+          onCheck={(s) => ask(`Is this token legit? ${s.mint}`)} />}
 
         {/* What the AI is doing */}
-        <Working notes={h.notes} working={h.working} quiet={h.sections.length > 0} />
+        <Working notes={h.notes} working={h.working && !asking} quiet={h.sections.length > 0} />
 
         {arrived && <p className="mx-4 mt-3 rounded-[calc(var(--t-radius)*.8)] bg-pos/14 text-pos px-3 py-2.5 text-[13px] rise">{arrived}</p>}
         {empty && !watch && <Funding address={address} apiBase={apiBase} compact={compact} />}
@@ -137,9 +209,17 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
 
         {snap && (
           <GenProvider snap={snap} tools={h.tools}>
-            {h.answer && <AnswerPanel a={h.answer} onClose={h.clearAnswer} snapReady />}
+            {h.answer && <div ref={answerRef}><AnswerPanel a={h.answer} onClose={h.clearAnswer} onShow={() => showChanged(h.answer?.changed ?? [])} onPin={pinCard} snapReady /></div>}
             <div className="mt-2">
-              {!empty && h.sections.map((s, i) => <SectionView key={`${i}-${s.kind}`} s={s} positions={snap.positions} tokens={snap.tokens} tools={h.tools} onOpen={setDetail} />)}
+              {!empty && h.sections.map((s, i) => (
+                <div key={`${i}-${s.kind}`} data-section={i} onClickCapture={(e) => { if (!(e.target as Element).closest("[data-menu]")) h.tap(i); }}
+                  className={`group/sec relative rounded-[var(--t-radius)] transition-shadow duration-500 ${flash.includes(i) ? "ring-2 ring-tape/70 ring-offset-2 ring-offset-cloth" : ""}`}>
+                  <SectionView s={s} positions={snap.positions} tokens={snap.tokens} tools={h.tools} onOpen={setDetail} />
+                  {!h.working && <SectionMenu first={i === 0} onRemove={() => remove(i)} onTop={() => h.moveTop(i)} />}
+                </div>
+              ))}
+              {/* Never a blank wallet: if there's money but no modules (yet), show what's held. */}
+              {!empty && !h.sections.length && !h.working && <SectionView s={{ kind: "tokens", title: "Tokens" }} positions={snap.positions} tokens={snap.tokens} tools={h.tools} onOpen={setDetail} />}
             </div>
             {detailPos && (
               <Sheet onClose={() => setDetail(null)}>
@@ -157,11 +237,28 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
         )}
       </div>
 
-      {/* Ask bar */}
+      {toast && (
+        <div className={`${compact ? "absolute" : "fixed"} inset-x-0 bottom-[116px] z-30 flex justify-center px-4 rise`}>
+          <div className="card !rounded-full flex items-center gap-3 px-4 py-2 text-[13px] shadow-2xl">
+            {toast.text}{toast.undo && <button className="font-medium text-tape" onClick={() => { toast.undo?.(); setToast(null); }}>Undo</button>}
+          </div>
+        </div>
+      )}
+
+      {/* Ask bar, with the moves you'd likely make right now just above it */}
       <div className={`${compact ? "absolute" : "fixed"} inset-x-0 bottom-0 z-30 px-3 pb-3 pt-6 bg-gradient-to-t from-cloth via-cloth/95 to-transparent`}>
+        {!prompt && !asking && snap && (
+          <div className="mb-2 -mx-3 px-3 flex gap-1.5 overflow-x-auto [scrollbar-width:none]">
+            {quick.map((ref) => (
+              <button key={ref} className="shrink-0 flex items-center gap-1.5 h-8 pl-2.5 pr-3 rounded-full bg-panel border border-line text-[12.5px] text-chalk/90 hover:bg-panel-2 disabled:opacity-40 transition-colors" disabled={watch && ref !== "receive"} onClick={() => runAction(ref)}>
+                <span className="text-tape [&>svg]:size-[14px]">{iconFor(ref)}</span>{labelFor(ref)}
+              </button>
+            ))}
+          </div>
+        )}
 
         <form className="flex gap-2 card !rounded-full p-1 pl-4" onSubmit={(e) => { e.preventDefault(); if (prompt.trim()) ask(prompt.trim()); }}>
-          <input className="flex-1 min-w-0 bg-transparent text-[14px] outline-none placeholder:text-faint" placeholder={h.working ? "Tailoring…" : "Ask Tailor anything…"} value={prompt} onChange={(e) => setPrompt(e.target.value)} disabled={!snap || h.working} />
+          <input className="flex-1 min-w-0 bg-transparent text-[14px] outline-none placeholder:text-faint" placeholder={h.working ? "Tailoring…" : site?.name ? `Ask about ${site.name}…` : "Ask Tailor anything…"} value={prompt} onChange={(e) => setPrompt(e.target.value)} disabled={!snap || h.working} />
           <button className="btn btn-primary !rounded-full !px-4" disabled={!snap || h.working || !prompt.trim()}>Go</button>
         </form>
       </div>
@@ -172,19 +269,101 @@ function Body({ h, header, compact, watch, address, apiBase }: { h: ReturnType<t
   );
 }
 
-/** The agent's answer: streamed text plus any cards it drew. */
-function AnswerPanel({ a, onClose, snapReady }: { a: import("./useHome").Answer; onClose(): void; snapReady: boolean }) {
+/** The agent's answer: its steps while it works, then streamed text, cards, and pointers to anything it changed. */
+function AnswerPanel({ a, onClose, onShow, onPin, snapReady }: { a: import("./useHome").Answer; onClose(): void; onShow(): void; onPin(c: import("@/lib/genui/spec").Card): void; snapReady: boolean }) {
+  const changed = a.changed?.length ?? 0;
   return (
-    <section className="mx-4 mt-4 card p-3.5 rise">
+    <section className="mx-4 mt-4 card p-3.5 rise overflow-hidden">
+      {!a.done && <div className="h-[3px] -mx-3.5 -mt-3.5 mb-3 overflow-hidden bg-panel-2"><div className="h-full w-1/3 bg-tape animate-[slide_1.2s_ease-in-out_infinite]" /></div>}
       <div className="flex items-start justify-between gap-3">
         <p className="text-[12px] text-faint truncate">{a.prompt}</p>
         {a.done && <button className="text-faint hover:text-chalk" aria-label="Dismiss" onClick={onClose}><X size={14} weight="bold" /></button>}
       </div>
-      {a.text && <p className={`mt-1.5 text-[14px] leading-snug whitespace-pre-wrap ${a.done ? "" : "caret"}`}>{a.text}</p>}
-      {!a.text && !a.done && <p className="mt-1.5 text-[14px] text-dim caret">Working on it</p>}
+      {a.steps.length > 0 && (!a.done || !a.text) && (
+        <ul className="mt-2 flex flex-col gap-1">
+          {a.steps.map((t, i) => {
+            const live = !a.done && i === a.steps.length - 1;
+            return <li key={i} className={`flex items-start gap-1.5 text-[12px] rise ${live ? "text-chalk" : "text-faint"}`}>{live ? <span className="mt-[5px] size-1.5 shrink-0 rounded-full bg-tape animate-pulse" /> : <CheckCircle size={12} weight="fill" className="mt-[2px] shrink-0 text-pos/80" />}<span className="[overflow-wrap:anywhere]">{t}</span></li>;
+          })}
+        </ul>
+      )}
+      {a.text && <AnswerText text={a.text} done={a.done} clamp={a.done && a.cards.length > 0} />}
+      {!a.text && !a.done && !a.steps.length && <p className="mt-1.5 text-[14px] text-dim caret">Working on it</p>}
       {a.error && <p className="mt-1.5 text-[13px] text-danger">{a.error}</p>}
-      {snapReady && a.cards.length > 0 && <div className="mt-3 grid grid-cols-1 gap-3">{a.cards.map((c, i) => <GenCard key={i} card={{ ...c, span: 4 }} />)}</div>}
+      {snapReady && a.cards.length > 0 && (
+        <div className="mt-3 grid grid-cols-1 gap-3">
+          {a.cards.map((c, i) => (
+            <div key={i} data-card={i}>
+              <GenCard card={{ ...c, span: 4 }} />
+              {a.done && <button className="mt-1.5 flex items-center gap-1 text-[11.5px] text-faint hover:text-chalk" onClick={() => onPin(c)}><PushPin size={12} weight="fill" />Pin to home</button>}
+            </div>
+          ))}
+        </div>
+      )}
+      {a.done && (changed > 0 || a.restyled) && (
+        <div className="mt-2.5 flex flex-wrap gap-2">
+          {changed > 0 && <button className="btn !py-1 !text-[12px]" onClick={onShow}><ArrowDown size={12} weight="bold" />{changed === 1 ? "See it on your home" : `See ${changed} changes on your home`}</button>}
+          {a.restyled && <span className="text-[12px] text-dim self-center">Restyled</span>}
+        </div>
+      )}
     </section>
+  );
+}
+
+const FILLER = new Set(["go", "a", "an", "i", "want", "to", "on", "the", "perp", "perps", "position", "with", "at", "for", "me", "open", "please", "some", "of", "usd", "usdc", "dollars", "leverage", "lev", "x"]);
+/** Parse "long btc", "short eth 5x $50", "go short sol with 100" into perp params, or null. */
+function parsePerp(text: string): Record<string, string> | null {
+  const t = text.toLowerCase().replace(/[,!?.]/g, " ");
+  const side = /\b(long|short)\b/.exec(t)?.[1];
+  if (!side || t.split(/\s+/).filter(Boolean).length > 9) return null;
+  const lev = /(\d+(?:\.\d+)?)\s*x\b/.exec(t)?.[1];
+  const amount = /\$\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:usd|usdc|dollars)\b/.exec(t);
+  const words = t.replace(/\$?\d+(?:\.\d+)?\s*x?\b/g, " ").split(/\s+/).filter((w) => w && w !== side && !FILLER.has(w));
+  const market = words.find((w) => /^\$?[a-z][a-z0-9]{1,7}$/.test(w))?.replace("$", "");
+  if (!market || words.length !== 1) return null; // anything more is a question for the agent
+  return { market: market.toUpperCase(), side, ...(lev ? { leverage: lev } : {}), ...(amount ? { collateral: amount[1] ?? amount[2] } : {}) };
+}
+
+/** The total, small and in the top bar. Tap to hide it (screen sharing, coffee shops). */
+function Balance({ total, wallet, defi }: { total?: number; wallet: number; defi: number }) {
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem("hideBalance") === "1"; } catch { return false; } });
+  const toggle = () => setHidden((x) => { try { localStorage.setItem("hideBalance", x ? "0" : "1"); } catch { /* storage blocked */ } return !x; });
+  if (total == null) return <span className="inline-block h-4 w-14 rounded bg-panel animate-pulse" />;
+  return (
+    <button className="num text-[15px] font-medium px-1.5 py-1 rounded-md hover:bg-panel-2" onClick={toggle}
+      title={hidden ? "Show balance" : defi > 1 ? `${usd(wallet, true)} wallet · ${usd(defi, true)} in DeFi — tap to hide` : "Tap to hide"}>
+      {hidden ? "••••" : usd(total, total >= 100_000)}
+    </button>
+  );
+}
+
+/** A module's own menu: tucked away until hovered or focused, so the home stays clean. */
+function SectionMenu({ first, onRemove, onTop }: { first: boolean; onRemove(): void; onTop(): void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="absolute right-6 top-3 z-10" data-menu>
+      <button aria-label="Module options" className={`size-6 rounded-full flex items-center justify-center text-faint hover:text-chalk hover:bg-panel-2 transition-opacity ${open ? "opacity-100" : "opacity-0 group-hover/sec:opacity-100 focus:opacity-100"}`} onClick={() => setOpen((o) => !o)}>
+        <DotsThree size={16} weight="bold" />
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-36 card p-1 shadow-2xl text-[13px]" onMouseLeave={() => setOpen(false)}>
+          {!first && <button className="w-full rounded-md px-2 py-1.5 text-left hover:bg-panel-2" onClick={() => { setOpen(false); onTop(); }}>Move to top</button>}
+          <button className="w-full rounded-md px-2 py-1.5 text-left text-danger hover:bg-panel-2" onClick={() => { setOpen(false); onRemove(); }}>Remove</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** With a card below, long text is clamped to a few lines: the card is the answer, the text its caption. */
+function AnswerText({ text, done, clamp }: { text: string; done: boolean; clamp: boolean }) {
+  const [more, setMore] = useState(false);
+  const long = clamp && text.length > 160;
+  return (
+    <>
+      <p className={`mt-1.5 text-[14px] leading-snug whitespace-pre-wrap [overflow-wrap:anywhere] ${done ? "" : "caret"} ${long && !more ? "line-clamp-3" : ""}`}><RichText text={text} /></p>
+      {long && <button className="mt-0.5 text-[12px] text-faint hover:text-chalk" onClick={() => setMore((m) => !m)}>{more ? "Less" : "More"}</button>}
+    </>
   );
 }
 
@@ -194,8 +373,13 @@ function Working({ notes, working, quiet }: { notes: Note[]; working: boolean; q
   const ai = notes.filter((n) => n.source === "ai");
   const chain = notes.filter((n) => n.source === "chain");
   if (!working && !notes.length) return null;
-  // Refreshing behind content that's already on screen: a thin line, not a panel.
-  if (working && quiet && !ai.length) return <div className="mx-4 mt-4 h-[2px] rounded-full overflow-hidden bg-panel-2"><div className="h-full w-1/3 bg-tape animate-[slide_1.2s_ease-in-out_infinite]" /></div>;
+  // Refreshing behind content that's already on screen: one clear line saying what it's doing.
+  if (working && quiet && !ai.length) return (
+    <div className="mx-4 mt-4 rounded-full bg-panel overflow-hidden rise">
+      <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-dim"><span className="size-1.5 rounded-full bg-tape animate-pulse shrink-0" /><span className="truncate">{chain.at(-1)?.text ?? "Checking your wallet"}</span></div>
+      <div className="h-[2px] bg-panel-2"><div className="h-full w-1/3 bg-tape animate-[slide_1.2s_ease-in-out_infinite]" /></div>
+    </div>
+  );
   if (!working) {
     return ai.length ? (
       <div className="mx-4 mt-4">

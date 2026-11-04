@@ -2,7 +2,8 @@
 import { PublicKey, type Connection } from "@solana/web3.js";
 import { jupHeaders } from "@/lib/core/solana";
 
-export const JUP = "https://api.jup.ag";
+// Keyed host for higher limits; the free keyless host otherwise.
+export const JUP = process.env.JUPITER_API_KEY ? "https://api.jup.ag" : "https://lite-api.jup.ag";
 export const PERPS = "https://perps-api.jup.ag/v1";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

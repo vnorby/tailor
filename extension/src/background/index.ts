@@ -70,6 +70,12 @@ function decide(id: string, approve: boolean, signed?: string[]) {
 // ---------- dApp connections ----------
 
 const ports = new Set<chrome.runtime.Port>();
+const pageReads = new Map<string, (page: unknown) => void>();
+/** The focused tab's own port: its origin is Chrome-attested, so no tabs permission is needed. */
+async function activePort() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return tab?.id != null ? [...ports].find((p) => p.sender?.tab?.id === tab.id && p.sender?.frameId === 0) : undefined;
+}
 
 async function isConnected(origin: string) { return !!(await vault.getMeta()).sites[origin]; }
 
@@ -188,11 +194,22 @@ chrome.runtime.onConnect.addListener((port) => {
   ports.add(port);
   port.onDisconnect.addListener(() => ports.delete(port));
   port.onMessage.addListener(async (req: DappRequest) => {
+    const m = req as unknown as { kind?: string; id?: string; page?: unknown };
+    if (m.kind === "page") { pageReads.get(m.id ?? "")?.(m.page ?? null); pageReads.delete(m.id ?? ""); return; }
     let res: DappResponse;
     try { res = { id: req.id, result: await handleDapp(origin, req) }; }
     catch (e) { res = { id: req.id, error: e instanceof Error ? e.message : String(e) }; }
     try { port.postMessage(res); } catch { /* tab went away */ }
   });
+});
+
+// Tabs opened before an install/update keep a dead copy of the bridge, so the wallet can't see
+// them (no site context, no page suggestions) until they're reloaded. Re-attach the bridge to
+// them. Only the bridge: re-running the page provider would register Tailor with dApps twice.
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+  if (reason !== "install" && reason !== "update") return; // e.g. a Chrome update: existing bridges are still alive
+  const tabs = await chrome.tabs.query({ url: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"] }).catch(() => []);
+  for (const t of tabs) if (t.id != null && !t.discarded) void chrome.scripting.executeScript({ target: { tabId: t.id }, files: ["bridge.js"] }).catch(() => {});
 });
 
 // ---------- extension pages ----------
@@ -220,6 +237,22 @@ async function handleUi(req: UiRequest): Promise<unknown> {
     case "sendSigned": return sendRaw(req.tx);
     case "getPending": { const p = pending.get(req.id); if (!p) throw new Error("This request expired."); const { resolve: _r, windowId: _w, ...pub } = p; return pub; }
     case "decide": decide(req.id, req.approve, req.signed); return null;
+    case "activeSite": {
+      const port = await activePort();
+      const origin = port?.sender?.origin;
+      return origin && /^https?:\/\//.test(origin) ? { origin, connected: await isConnected(origin) } : null;
+    }
+    case "readPage": {
+      const { pageSuggestions } = await chrome.storage.local.get("pageSuggestions");
+      const port = pageSuggestions === false ? undefined : await activePort();
+      if (!port) return null;
+      const id = crypto.randomUUID();
+      return await new Promise((resolve) => {
+        pageReads.set(id, resolve);
+        setTimeout(() => { if (pageReads.delete(id)) resolve(null); }, 1500);
+        try { port.postMessage({ kind: "readPage", id }); } catch { pageReads.delete(id); resolve(null); }
+      });
+    }
     case "connectedSites": return Object.entries((await vault.getMeta()).sites).map(([origin, v]) => ({ origin, ...v }));
     case "setAlerts": { await chrome.storage.local.set({ alerts: req.on }); if (req.on) void checkAlerts(); return null; }
     case "checkAlerts": await checkAlerts(); return null;

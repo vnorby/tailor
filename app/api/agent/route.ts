@@ -11,7 +11,7 @@ export const maxDuration = 300;
 
 /** POST { owner, prompt, profile?, theme?, current? } → NDJSON stream of AgentEvents. */
 export async function POST(req: Request) {
-  const b = (await req.json().catch(() => ({}))) as { owner?: string; prompt?: string; profile?: Profile; theme?: Theme; current?: Home };
+  const b = (await req.json().catch(() => ({}))) as { owner?: string; prompt?: string; profile?: Profile; theme?: Theme; current?: Home; site?: string };
   const owner = b.owner ?? "";
   if (!isAddress(owner)) return Response.json({ error: "Not a valid Solana address." }, { status: 400 });
   const prompt = (b.prompt ?? "").trim();
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
         const saved = await load(key);
         const current = b.current && Array.isArray(b.current.sections) ? b.current : (saved.layout as unknown as Home) ?? null;
         for await (const ev of runAgent({
-          snap, tools, prefs: saved.prefs, profile: b.profile ?? null, theme: b.theme ?? null, current, prompt,
+          snap, tools, prefs: saved.prefs, profile: b.profile ?? null, theme: b.theme ?? null, current, prompt, site: typeof b.site === "string" ? b.site.slice(0, 100) : undefined,
           onHomeDone: (home, prefs) => save(key, { layout: home as never, prefs, fingerprint: fingerprint(snap) }),
         })) send(ev);
       } catch (e) { send({ type: "error", error: e instanceof Error ? e.message : String(e) }); }

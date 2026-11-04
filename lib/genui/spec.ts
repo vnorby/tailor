@@ -33,7 +33,12 @@ export type Node =
   | { type: "action"; positionId: string; actionId: string; label?: string; variant?: "primary" | "danger" | "ghost"; params?: NV[] }
   | { type: "whatif"; positionId: string; input: { label: string; min: string; max: string; step?: number; unit?: string; initial?: string }; outputs: { label: string; expr: string; format?: Fmt; warnIf?: string; dangerIf?: string }[]; actionId?: string; actionParam?: string; actionLabel?: string }
   | { type: "tool"; toolId: string; defaults?: NV[] }
-  | { type: "code"; html: string; height?: number };
+  | { type: "code"; html: string; height?: number }
+  | { type: "field"; label?: string; value: string; copy?: boolean }   // a value to reuse: shown in full, one-tap copy
+  | { type: "qr"; value: string; caption?: string }
+  | { type: "link"; label: string; url: string }
+  | { type: "asset"; mint: string; note?: string }   // token row: icon, price, 24h, verification, Buy
+  | { type: "button"; toolId: string; label: string; sub?: string; params?: NV[]; variant?: "primary" | "ghost" };  // opens a Tailor tool (stake, swap, lend…) prefilled
 
 export interface Card {
   span: 1 | 2 | 3 | 4;
@@ -56,9 +61,24 @@ export interface Ctx { snap: Snapshot; tools: ToolDef[] }
 function posOk(ctx: Ctx, id: unknown) { return typeof id === "string" && ctx.snap.positions.some((p) => p.id === id); }
 function actionOk(ctx: Ctx, pid: unknown, aid: unknown) { return ctx.snap.positions.find((p) => p.id === pid)?.actions.some((a) => a.id === aid) ?? false; }
 
+const SIZES: Record<string, string> = { xs: "s", sm: "s", small: "s", md: "m", medium: "m", lg: "l", large: "l", xxl: "xl" };
+
+/** Models sometimes write `{ heading: {…} }` or `{ kind: "heading" }` instead of `{ type: "heading", … }`, or "md" for "m": accept them. */
+function normalize(raw: Record<string, unknown>): Record<string, unknown> {
+  let n = raw;
+  if (typeof n.type !== "string" && typeof n.kind === "string") { const { kind, ...rest } = n; n = { ...rest, type: kind }; }
+  if (typeof n.type !== "string") {
+    const keys = Object.keys(n);
+    const k = keys.find((x) => n[x] && typeof n[x] === "object" && !Array.isArray(n[x]) && x !== "input");
+    if (keys.length === 1 && k) n = { type: k, ...(n[k] as Record<string, unknown>) };
+  }
+  if (typeof n.size === "string" && SIZES[n.size]) n = { ...n, size: SIZES[n.size] };
+  return n;
+}
+
 export function sanitizeNode(raw: unknown, ctx: Ctx, depth = 0): Node | null {
   if (!raw || typeof raw !== "object" || depth > 8) return null;
-  const n = raw as Record<string, unknown>;
+  const n = normalize(raw as Record<string, unknown>);
   const kids = () => (Array.isArray(n.children) ? n.children.map((c) => sanitizeNode(c, ctx, depth + 1)).filter((c): c is Node => !!c).slice(0, 24) : []);
   const pid = posOk(ctx, n.positionId) ? (n.positionId as string) : undefined;
   switch (n.type) {
@@ -71,6 +91,18 @@ export function sanitizeNode(raw: unknown, ctx: Ctx, depth = 0): Node | null {
     case "pill": { const t = str(n.text, 40); return t ? { type: "pill", text: t, tone: tone(n.tone) } : null; }
     case "callout": { const t = str(n.text, 400); return t ? { type: "callout", text: t, tone: tone(n.tone) } : null; }
     case "divider": return { type: "divider" };
+    case "field": { const v = str(n.value, 300); return v ? { type: "field", label: str(n.label, 60), value: v, copy: n.copy !== false } : null; }
+    case "asset": return typeof n.mint === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(n.mint) ? { type: "asset", mint: n.mint, note: str(n.note, 80) } : null;
+    case "button": {
+      const l = str(n.label, 40);
+      return l && typeof n.toolId === "string" && ctx.tools.some((t) => t.id === n.toolId)
+        ? { type: "button", toolId: n.toolId, label: l, sub: str(n.sub, 60), params: nvs(n.params), variant: n.variant === "primary" ? "primary" : undefined } : null;
+    }
+    case "qr": { const v = str(n.value, 300); return v ? { type: "qr", value: v, caption: str(n.caption, 120) } : null; }
+    case "link": {
+      const l = str(n.label, 60), u = str(n.url, 500);
+      try { return l && u && new URL(u).protocol === "https:" ? { type: "link", label: l, url: u } : null; } catch { return null; }
+    }
     case "stat": { const l = str(n.label, 60), v = str(n.value, 120); return l && v ? { type: "stat", label: l, value: v, sub: str(n.sub, 120), tone: tone(n.tone), size: ["s", "m", "l", "xl"].includes(n.size as string) ? n.size as "s" : undefined } : null; }
     case "gauge": { const l = str(n.label, 60), v = str(n.value), m = str(n.max); return l && v && m ? { type: "gauge", label: l, value: v, max: m, warnAt: str(n.warnAt), dangerAt: str(n.dangerAt), format: fmtOf(n.format), caption: str(n.caption, 200) } : null; }
     case "track": {

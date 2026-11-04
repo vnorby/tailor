@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Copy, GearSix, LockSimple, SidebarSimple } from "@phosphor-icons/react";
 import { Home } from "../home/Home";
 import { disablePasskey, enablePasskey, passkeyRecord, passkeysAvailable } from "../passkey";
@@ -41,18 +41,20 @@ function Wallet({ state, refresh }: { state: WalletState; refresh(): Promise<voi
   const active = state.accounts.find((a) => a.id === state.activeId)!;
   const [settings, setSettings] = useState(false);
   const openPanel = async () => { const w = await chrome.windows.getCurrent(); await chrome.sidePanel.open({ windowId: w.id! }); window.close(); };
-  const header = (
-    <header className="flex items-center justify-between px-3 pt-3">
+  const icon = "size-7 rounded-md flex items-center justify-center text-faint hover:text-chalk hover:bg-panel-2";
+  const header = (balance?: ReactNode) => (
+    <header className="flex items-center justify-between gap-1 px-3 pt-3 pb-1">
       <AccountSwitcher state={state} active={active} onChanged={() => void refresh()} />
-      <div className="flex items-center gap-1">
-        <button className="btn !px-2 !py-1.5" title="Open full wallet" aria-label="Open full wallet" onClick={openPanel}><SidebarSimple size={16} weight="fill" /></button>
-        <button className="btn !px-2 !py-1.5" title="Settings" aria-label="Settings" onClick={() => setSettings(true)}><GearSix size={16} weight="fill" /></button>
-        <button className="btn !px-2 !py-1.5" title="Lock" aria-label="Lock" onClick={async () => { await call({ type: "lock" }); await refresh(); }}><LockSimple size={16} weight="fill" /></button>
+      <div className="flex items-center">
+        {balance}
+        <button className={icon} title="Open full wallet" aria-label="Open full wallet" onClick={openPanel}><SidebarSimple size={15} weight="fill" /></button>
+        <button className={icon} title="Settings" aria-label="Settings" onClick={() => setSettings(true)}><GearSix size={15} weight="fill" /></button>
+        <button className={icon} title="Lock" aria-label="Lock" onClick={async () => { await call({ type: "lock" }); await refresh(); }}><LockSimple size={15} weight="fill" /></button>
       </div>
     </header>
   );
-  if (settings) return <Frame>{header}<Settings state={state} activeId={active.id} onBack={() => setSettings(false)} refresh={refresh} /></Frame>;
-  return <div className="relative"><Home key={active.id} state={state} active={active} header={header} compact /></div>;
+  if (settings) return <Frame>{header()}<Settings state={state} activeId={active.id} onBack={() => setSettings(false)} refresh={refresh} /></Frame>;
+  return <div className="relative"><Home state={state} active={active} header={header} compact /></div>;
 }
 
 function Settings({ state, activeId, onBack, refresh }: { state: WalletState; activeId: string; onBack(): void; refresh(): Promise<void> }) {
@@ -98,6 +100,7 @@ function Settings({ state, activeId, onBack, refresh }: { state: WalletState; ac
       )}
       <PasskeySetting />
       <AlertsSetting />
+      <PageSetting />
       <section className="flex flex-col gap-2">
         <h3 className="text-[11px] uppercase tracking-[0.12em] text-faint">Look</h3>
         <button className="btn justify-center" onClick={() => chrome.tabs.create({ url: "onboarding.html" })}>Restyle wallet</button>
@@ -168,6 +171,21 @@ function PasskeySetting() {
       ) : (
         <button className="btn justify-center" onClick={() => setAsking(true)}>Unlock with Touch ID / passkey</button>
       )}
+    </section>
+  );
+}
+
+function PageSetting() {
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => { void chrome.storage.local.get("pageSuggestions").then(({ pageSuggestions }) => setOn(pageSuggestions !== false)); }, []);
+  if (on === null) return null;
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="text-[11px] uppercase tracking-[0.12em] text-faint">Page suggestions</h3>
+      <label className="flex items-center justify-between gap-3">
+        <span className="text-dim">Read the open page for tradable tickers. Only while Tailor is open.</span>
+        <input type="checkbox" checked={on} onChange={(e) => { setOn(e.target.checked); void chrome.storage.local.set({ pageSuggestions: e.target.checked }); }} />
+      </label>
     </section>
   );
 }

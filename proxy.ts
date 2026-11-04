@@ -1,15 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 /**
- * 1. CORS for the Tailor browser extension. Only chrome-extension:// origins get CORS
- *    headers; everything else stays same-origin. EXTENSION_IDS (comma-separated) pins
- *    it to specific published extension ids once we have them.
+ * 1. Access: only the Tailor extension (pinned by ID) and this server's own pages may call
+ *    the API; every other browser origin gets a 403. Meant to run on localhost.
  * 2. Rate limiting for the expensive AI endpoints: an in-memory sliding window per
  *    client IP (per server instance — good enough to stop runaway loops and casual
  *    abuse; use a shared store such as Upstash for a hard global limit).
  */
 
-const LIMITED = ["/api/home", "/api/page", "/api/theme", "/api/agent", "/api/security/explain"];
+const LIMITED = ["/api/home", "/api/page", "/api/theme", "/api/agent", "/api/security/explain", "/api/suggest"];
 const WINDOWS = [
   { ms: 60_000, max: 30, label: "minute" },
   { ms: 60 * 60_000, max: 300, label: "hour" },
@@ -42,10 +41,15 @@ function rateLimit(key: string, now = Date.now()): { retryAfter: number; label: 
   return null;
 }
 
+// The unpacked extension's ID is fixed by the "key" in its manifest. Only it may call this server,
+// so other installed extensions can't spend your API credits. EXTENSION_IDS overrides (comma-separated,
+// e.g. a Chrome Web Store build's ID); "*" allows any extension (not recommended).
+const DEFAULT_EXTENSION_ID = "kmoplbbmdhnenkckmjdjdegfndcnciia";
+const PINNED = (process.env.EXTENSION_IDS ?? DEFAULT_EXTENSION_ID).split(",").map((s) => s.trim()).filter(Boolean);
+
 export function proxy(req: NextRequest) {
   const origin = req.headers.get("origin") ?? "";
-  const pinned = (process.env.EXTENSION_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  const allowed = origin.startsWith("chrome-extension://") && (!pinned.length || pinned.includes(origin.slice("chrome-extension://".length)));
+  const allowed = origin.startsWith("chrome-extension://") && (PINNED.includes("*") || PINNED.includes(origin.slice("chrome-extension://".length)));
   const cors: Record<string, string> = allowed ? {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "GET, POST, OPTIONS",
@@ -54,6 +58,11 @@ export function proxy(req: NextRequest) {
     vary: "origin",
   } : {};
   if (allowed && req.method === "OPTIONS") return new NextResponse(null, { status: 204, headers: cors });
+  // Requests from any other origin are refused outright, not just left unreadable: a web page can send a
+  // "simple" cross-site POST (text/plain, no preflight) that would otherwise run and spend your AI credits.
+  // Same-origin calls (this server's own pages) and non-browser clients send no foreign Origin.
+  const sameOrigin = !origin || origin === req.nextUrl.origin;
+  if (!allowed && !sameOrigin) return NextResponse.json({ error: "Origin not allowed." }, { status: 403 });
 
   const path = req.nextUrl.pathname;
   if (req.method !== "OPTIONS" && LIMITED.some((p) => path === p || path.startsWith(`${p}/`))) {

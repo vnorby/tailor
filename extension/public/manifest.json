@@ -30,7 +30,8 @@
     "storage",
     "alarms",
     "sidePanel",
-    "notifications"
+    "notifications",
+    "scripting"
   ],
   "content_scripts": [
     {
@@ -65,5 +66,11 @@
     "pages": [
       "sandbox.html"
     ]
-  }
+  },
+  "host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApDkDq+0c5Ks5MW4Mu9jV8qaU3WELACrw8WuHTpmbtVdbpmydLvjFamMnUjInEJn1mi9bDHI5OfEpg38l0ed7cdeWhogODX1cPIWkel9im1zOI6+SROKFHDOx9Os0hbdCQqmS2hgc9ev/WtvSsYJHy1OWe7qFmbdxcCmW360PaSwKsxiPFxO4ONeHTCEpnHeWYfm5MgYkU9cSz9yKgYxQ0+fHDrkrVxkShJGA8AqzQSSrrezpko5fpcyec/czcrkU4zUFq0XrDfFbW+4lP6pb2EFGhNNcHe+n7FkOA6io2qrf8jGCU5uHc3sn+XFx1dFhYUnFUeHRII5ZDOgQuuktyQIDAQAB"
 }

@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import type { Action, ActionField, Position, ToolDef } from "@/lib/core/types";
 import { short } from "@/lib/ui/format";
 import { BalanceChanges, type Preview } from "./BalanceChanges";
+import { SwapForm } from "./SwapForm";
+import { PerpForm } from "./PerpForm";
 
 /**
  * How the host signs and where the API lives. The website signs through a connected
@@ -32,7 +34,7 @@ type Stage =
   | { s: "done"; sigs: string[]; summary: string }
   | { s: "error"; message: string; sigs?: string[] };
 
-const Ctx = createContext<{ open(t: Target): void } | null>(null);
+const Ctx = createContext<{ open(t: Target): void; apiBase: string; owner: string } | null>(null);
 export const useActions = () => {
   const c = useContext(Ctx);
   if (!c) throw new Error("useActions outside ActionProvider");
@@ -43,7 +45,7 @@ export function ActionProvider({ executor, onDone, children }: { executor: Execu
   const [target, setTarget] = useState<Target | null>(null);
   const open = useCallback((t: Target) => setTarget(t), []);
   return (
-    <Ctx.Provider value={{ open }}>
+    <Ctx.Provider value={{ open, apiBase: executor.apiBase, owner: executor.owner }}>
       {children}
       {target && <Sheet key={JSON.stringify(target.kind === "action" ? [target.position.id, target.action.id] : target.kind === "tool" ? target.tool.id : target.prep.txs[0]?.slice(0, 32))} ex={executor} target={target} onClose={(changed) => { setTarget(null); if (changed) onDone(); }} />}
     </Ctx.Provider>
@@ -64,10 +66,14 @@ function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(
     return init;
   });
   // Tools and what-if sliders arrive with their inputs already chosen, so build straight away.
-  const direct = !fields.length || (target.kind === "tool" && !target.form) || (!!given && fields.every((f) => given?.[f.name] != null || f.default != null));
+  // Purpose-built forms (swap, long/short) are always shown when asked for, even fully prefilled.
+  const showForm = target.kind === "tool" && !!target.form && ["swap", "phoenix-perp"].includes(target.tool.id);
+  const direct = !showForm && (!fields.length || (target.kind === "tool" && !target.form) || (!!given && fields.every((f) => given?.[f.name] != null || f.default != null)));
   const [stage, setStage] = useState<Stage>(target.kind === "prepared" ? { s: "review", prep: target.prep } : { s: direct ? "preparing" : "form" });
   const label = target.kind === "action" ? target.action.label : target.kind === "tool" ? target.tool.label : target.title ?? "Review";
   const danger = target.kind === "action" && target.action.danger;
+  // Tools with their own purpose-built form instead of generic fields.
+  const custom = target.kind === "tool" && ["swap", "phoenix-perp"].includes(target.tool.id) ? target.tool.id : null;
 
   const preview = useCallback((prep: Prepared) => {
     // Exact balance changes for the first tx; later txs depend on it landing.
@@ -135,7 +141,9 @@ function Sheet({ ex, target, onClose }: { ex: Executor; target: Target; onClose(
         </div>
         <div className="tape my-4" />
 
-        {stage.s === "form" && (
+        {stage.s === "form" && custom === "swap" && <SwapForm apiBase={ex.apiBase} owner={owner} params={params} onChange={setParams} onSubmit={() => void prepare()} />}
+        {stage.s === "form" && custom === "phoenix-perp" && <PerpForm apiBase={ex.apiBase} owner={owner} params={params} onChange={setParams} onSubmit={() => void prepare()} />}
+        {stage.s === "form" && !custom && (
           <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); void prepare(); }}>
             {fields.map((f) => <Field key={f.name} f={f} value={params[f.name] ?? ""} onChange={(v) => setParams((p) => ({ ...p, [f.name]: v }))} />)}
             <button className={`btn ${danger ? "btn-danger" : "btn-primary"} justify-center mt-1`} type="submit">Preview</button>

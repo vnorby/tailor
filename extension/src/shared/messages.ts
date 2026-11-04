@@ -57,7 +57,11 @@ export type UiRequest =
   | { type: "setAlerts"; on: boolean }
   | { type: "checkAlerts" }
   | { type: "connectedSites" }
+  | { type: "activeSite" }       // → { origin, connected } for the focused tab, or null
+  | { type: "readPage" }         // → PageRead of the focused tab (null if unavailable or skipped)
   | { type: "disconnectSite"; origin: string };
+
+export interface PageRead { url: string; title: string; selection: string; text: string; cashtags: string[]; addresses: string[] }
 
 export type UiResponse<T = unknown> = { ok: true; data: T } | { ok: false; error: string };
 

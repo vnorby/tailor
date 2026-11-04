@@ -3,7 +3,7 @@ import { getSnapshot } from "@/lib/core/cache";
 import { isAddress } from "@/lib/core/solana";
 import { load, save } from "@/lib/core/store";
 import { fingerprint } from "@/lib/genui/generate";
-import { generateHome, instantHome, type Home, type Profile } from "@/lib/genui/home";
+import { generateHome, instantHome, type Home, type Profile, type Usage } from "@/lib/genui/home";
 import { generateTheme, type Theme } from "@/lib/genui/theme";
 
 export const maxDuration = 300;
@@ -15,7 +15,7 @@ export const maxDuration = 300;
  * If nothing changed and there's no prompt, the cached home is replayed instantly.
  */
 export async function POST(req: Request) {
-  const b = (await req.json().catch(() => ({}))) as { owner?: string; prompt?: string; reset?: boolean; fresh?: boolean; profile?: Profile; theme?: Theme; current?: Home };
+  const b = (await req.json().catch(() => ({}))) as { owner?: string; prompt?: string; reset?: boolean; fresh?: boolean; profile?: Profile; theme?: Theme; current?: Home; usage?: Usage[] };
   const owner = b.owner ?? "";
   if (!isAddress(owner)) return Response.json({ error: "Not a valid Solana address." }, { status: 400 });
   const prompt = typeof b.prompt === "string" ? b.prompt.trim().slice(0, 1000) : "";
@@ -46,7 +46,7 @@ export async function POST(req: Request) {
         } else {
           // Show a code-built home right away; Claude's personalized one replaces it when ready.
           if (!prompt && !b.reset && !(b.current && Array.isArray(b.current.sections) && b.current.sections.length)) send({ type: "instant", home: instantHome(snap) });
-          for await (const ev of generateHome(snap, tools, prefs, profile, prompt || undefined, (b.current && Array.isArray(b.current.sections) ? b.current : null) ?? (saved.layout as unknown as Home) ?? null)) {
+          for await (const ev of generateHome(snap, tools, prefs, profile, prompt || undefined, (b.current && Array.isArray(b.current.sections) ? b.current : null) ?? (saved.layout as unknown as Home) ?? null, usageOf(b.usage))) {
             if (ev.type === "restyle") {
               // Hand the look to the theme designer, starting from the user's current theme.
               for await (const t of generateTheme({ activities: profile?.activities ?? [], style: ev.request, current: b.theme ?? null })) {
@@ -65,3 +65,7 @@ export async function POST(req: Request) {
   });
   return new Response(body, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
 }
+
+const usageOf = (u: unknown): Usage[] | undefined => Array.isArray(u)
+  ? u.slice(0, 40).filter((x) => x && typeof x.key === "string").map((x) => ({ key: String(x.key).slice(0, 120), opens: Number(x.opens) || 0, taps: Number(x.taps) || 0, daysSinceTap: x.daysSinceTap == null ? null : Number(x.daysSinceTap) }))
+  : undefined;
