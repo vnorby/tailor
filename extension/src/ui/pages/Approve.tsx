@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { call, type PendingRequest } from "~/shared/messages";
 import { BalanceChanges, type Preview } from "@/components/BalanceChanges";
 import { Globe } from "@phosphor-icons/react";
+import { ledgerSignTxs } from "~/ledger/ledger";
 import { Logo, mount, short, Unlock, useWalletState } from "../common";
 import { MaliciousInterstitial, SiteBanner, useDomainCheck } from "../security/SiteCheck";
 
@@ -37,9 +38,25 @@ function Approve() {
     });
   }, [req, isTx, state?.apiBase]);
 
+  const [ledgerPrompt, setLedgerPrompt] = useState(false);
+  const [ledgerErr, setLedgerErr] = useState<string | null>(null);
   const decide = async (approve: boolean) => {
     setBusy(true);
-    try { await call({ type: "decide", id, approve }); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); return; }
+    try {
+      // Ledger accounts sign here, on the device; the background verifies the signatures.
+      const acct = state?.accounts.find((a) => a.address === req?.account);
+      let signed: string[] | undefined;
+      if (approve && acct?.kind === "ledger" && req && (req.method === "signTransaction" || req.method === "signAndSendTransaction")) {
+        setLedgerPrompt(true);
+        signed = await ledgerSignTxs(acct.address, acct.path!, req.payload);
+      }
+      await call({ type: "decide", id, approve, signed });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      setLedgerPrompt(false); setBusy(false);
+      if (/ledger|device|blind/i.test(m)) setLedgerErr(m); else setErr(m);
+      return;
+    }
     window.close();
   };
 
@@ -86,6 +103,8 @@ function Approve() {
           {(req.method === "signMessage" || req.method === "signIn") && (
             <pre className="card p-3 text-[12.5px] whitespace-pre-wrap break-words max-h-64 overflow-auto num">{req.messageText ?? `(binary data, ${atob(req.payload[0] ?? "").length} bytes)`}</pre>
           )}
+          {ledgerPrompt && <p className="rounded-lg bg-panel-2 px-3 py-2 text-[13px]">Confirm on your Ledger. Check that the details on its screen match.</p>}
+          {ledgerErr && <p className="rounded-lg bg-warn/12 text-warn px-3 py-2 text-[13px]">{ledgerErr}</p>}
           <div className="mt-auto grid grid-cols-2 gap-2 pt-2">
             <button className="btn justify-center !py-2.5" disabled={busy} onClick={() => decide(false)}>Reject</button>
             <button className={`btn justify-center !py-2.5 ${risky ? "btn-danger" : "btn-primary"}`} disabled={busy || site === "loading" || (malicious && !acknowledged) || previews.some((p) => p === "loading")} onClick={() => decide(true)}>

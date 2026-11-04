@@ -26,7 +26,7 @@ await build({
   publicDir: "public",
   build: {
     outDir: "dist", emptyOutDir: true, target: "chrome120", watch, sourcemap: false,
-    rollupOptions: { input: Object.fromEntries(["popup", "sidepanel", "approve", "onboarding"].map((p) => [p, resolve(here, `${p}.html`)])) },
+    rollupOptions: { input: Object.fromEntries(["popup", "sidepanel", "approve", "onboarding", "ledger"].map((p) => [p, resolve(here, `${p}.html`)])) },
   },
 });
 

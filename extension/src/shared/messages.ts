@@ -4,8 +4,9 @@ export interface AccountMeta {
   id: string;
   name: string;
   address: string;
-  kind: "derived" | "imported" | "watch";
+  kind: "derived" | "imported" | "watch" | "ledger";
   index?: number;           // derivation index for "derived"
+  path?: string;            // derivation path on the device for "ledger"
 }
 
 export interface WalletState {
@@ -40,6 +41,7 @@ export type UiRequest =
   | { type: "addAccount"; name?: string }
   | { type: "importKey"; privateKey: string; name?: string }
   | { type: "addWatch"; address: string; name?: string }
+  | { type: "addLedger"; accounts: { address: string; path: string }[] }
   | { type: "renameAccount"; id: string; name: string }
   | { type: "removeAccount"; id: string }
   | { type: "setActive"; id: string }
@@ -49,7 +51,7 @@ export type UiRequest =
   | { type: "signOwn"; txs: string[] }                 // UI-initiated txs, already reviewed in the trusted sheet
   | { type: "sendSigned"; tx: string }
   | { type: "getPending"; id: string }
-  | { type: "decide"; id: string; approve: boolean }
+  | { type: "decide"; id: string; approve: boolean; signed?: string[] }   // signed: Ledger-signed txs from the approval window
   | { type: "connectedSites" }
   | { type: "disconnectSite"; origin: string };
 

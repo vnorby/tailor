@@ -11,6 +11,7 @@
 import bs58 from "bs58";
 import * as vault from "./vault";
 import { applySignature, b64 } from "~/shared/tx";
+import { verifyDeviceSigned } from "~/shared/verify";
 import { sign } from "~/vault/derive";
 import type { DappEvent, DappRequest, DappResponse, PendingRequest, UiRequest, UiResponse } from "~/shared/messages";
 
@@ -39,28 +40,29 @@ async function signTxs(address: string, txs: string[]): Promise<string[]> {
 
 // ---------- approvals ----------
 
-const pending = new Map<string, PendingRequest & { resolve(ok: boolean): void; windowId?: number }>();
+interface Decision { approve: boolean; signed?: string[] }
+const pending = new Map<string, PendingRequest & { resolve(d: Decision): void; windowId?: number }>();
 
-async function requestApproval(req: Omit<PendingRequest, "id" | "createdAt">): Promise<boolean> {
+async function requestApproval(req: Omit<PendingRequest, "id" | "createdAt">): Promise<Decision> {
   const id = crypto.randomUUID();
-  return new Promise<boolean>((resolve) => {
-    const entry: PendingRequest & { resolve(ok: boolean): void; windowId?: number } = { ...req, id, createdAt: Date.now(), resolve };
+  return new Promise<Decision>((resolve) => {
+    const entry: PendingRequest & { resolve(d: Decision): void; windowId?: number } = { ...req, id, createdAt: Date.now(), resolve };
     pending.set(id, entry);
     void chrome.windows.create({ url: `approve.html?id=${id}`, type: "popup", width: 380, height: 660, focused: true })
       .then((w) => { entry.windowId = w?.id; })
-      .catch(() => { pending.delete(id); resolve(false); });
+      .catch(() => { pending.delete(id); resolve({ approve: false }); });
   });
 }
 
 chrome.windows.onRemoved.addListener((windowId) => {
-  for (const [id, p] of pending) if (p.windowId === windowId) { pending.delete(id); p.resolve(false); }
+  for (const [id, p] of pending) if (p.windowId === windowId) { pending.delete(id); p.resolve({ approve: false }); }
 });
 
-function decide(id: string, approve: boolean) {
+function decide(id: string, approve: boolean, signed?: string[]) {
   const p = pending.get(id);
   if (!p) throw new Error("This request expired.");
   pending.delete(id);
-  p.resolve(approve);
+  p.resolve({ approve, signed });
   if (p.windowId != null) void chrome.windows.remove(p.windowId).catch(() => {});
 }
 
@@ -116,8 +118,8 @@ async function handleDapp(origin: string, req: DappRequest): Promise<unknown> {
       if (await isConnected(origin)) { const a = await signingAccount(); return [{ address: a.address }]; }
       if (req.params.silent) return [];
       const a = await signingAccount().catch(() => null);
-      const ok = await requestApproval({ origin, method: "connect", account: a?.address ?? "", payload: [], warnings: [] });
-      if (!ok) throw new Error("User rejected the request.");
+      const { approve } = await requestApproval({ origin, method: "connect", account: a?.address ?? "", payload: [], warnings: [] });
+      if (!approve) throw new Error("User rejected the request.");
       const acct = await signingAccount();
       const meta = await vault.getMeta();
       meta.sites[origin] = { connectedAt: Date.now() };
@@ -138,9 +140,9 @@ async function handleDapp(origin: string, req: DappRequest): Promise<unknown> {
       if (address !== acct.address) throw new Error("That account isn't the active account in Tailor.");
       const txs = (req.params.transactions as string[] | undefined) ?? [];
       if (!txs.length || txs.length > 20) throw new Error("Invalid transactions.");
-      const ok = await requestApproval({ origin, method: req.method, account: address, payload: txs, warnings: [] });
-      if (!ok) throw new Error("User rejected the request.");
-      const signed = await signTxs(address, txs);
+      const d = await requestApproval({ origin, method: req.method, account: address, payload: txs, warnings: [] });
+      if (!d.approve) throw new Error("User rejected the request.");
+      const signed = acct.kind === "ledger" ? verifyDeviceSigned(address, txs, d.signed) : await signTxs(address, txs);
       if (req.method === "signTransaction") return signed;
       const sigs: string[] = [];
       for (const s of signed) sigs.push(await sendRaw(s));
@@ -149,6 +151,7 @@ async function handleDapp(origin: string, req: DappRequest): Promise<unknown> {
     case "signMessage": {
       if (!(await isConnected(origin))) throw new Error("Connect first.");
       const acct = await signingAccount();
+      if (acct.kind === "ledger") throw new Error("Message signing isn't supported for Ledger accounts in Tailor yet.");
       const msg = String(req.params.message ?? "");
       const bytes = b64.dec(msg);
       let text: string | undefined;
@@ -156,16 +159,17 @@ async function handleDapp(origin: string, req: DappRequest): Promise<unknown> {
       // A message that parses as a transaction could be a disguised signature request.
       const looksLikeTx = !text && bytes.length > 64 && (bytes[0] & 0x80 || bytes[0] <= 3);
       const warnings = looksLikeTx ? ["This message looks like a transaction. Signing it could authorize a transfer."] : [];
-      const ok = await requestApproval({ origin, method: "signMessage", account: acct.address, payload: [msg], messageText: text, warnings });
-      if (!ok) throw new Error("User rejected the request.");
+      const { approve } = await requestApproval({ origin, method: "signMessage", account: acct.address, payload: [msg], messageText: text, warnings });
+      if (!approve) throw new Error("User rejected the request.");
       const kp = await vault.keypairFor(acct.address);
       return b64.enc(sign(bytes, kp.secretKey));
     }
     case "signIn": {
       const acct = await signingAccount();
+      if (acct.kind === "ledger") throw new Error("Sign-in with a Ledger account isn't supported in Tailor yet.");
       const { text, warnings } = siwsMessage(req.params.input as Record<string, unknown> ?? {}, acct.address, origin);
-      const ok = await requestApproval({ origin, method: "signIn", account: acct.address, payload: [], messageText: text, warnings });
-      if (!ok) throw new Error("User rejected the request.");
+      const { approve } = await requestApproval({ origin, method: "signIn", account: acct.address, payload: [], messageText: text, warnings });
+      if (!approve) throw new Error("User rejected the request.");
       const meta = await vault.getMeta();
       meta.sites[origin] = { connectedAt: Date.now() };
       await vault.setMeta(meta);
@@ -202,16 +206,17 @@ async function handleUi(req: UiRequest): Promise<unknown> {
     case "addAccount": { const a = await vault.addDerived(req.name); await broadcastAccounts(); return a; }
     case "importKey": { const a = await vault.importKey(req.privateKey, req.name); await broadcastAccounts(); return a; }
     case "addWatch": return vault.addWatch(req.address, req.name);
+    case "addLedger": { const a = await vault.addLedger(req.accounts); await broadcastAccounts(); return a; }
     case "renameAccount": { const m = await vault.getMeta(); const a = m.accounts.find((x) => x.id === req.id); if (a) a.name = req.name.slice(0, 32); await vault.setMeta(m); return null; }
     case "removeAccount": await vault.removeAccount(req.id); await broadcastAccounts(); return vault.state();
     case "setActive": { const m = await vault.getMeta(); if (m.accounts.some((a) => a.id === req.id)) m.activeId = req.id; await vault.setMeta(m); await broadcastAccounts(); return vault.state(); }
     case "reveal": return vault.reveal(req.password, req.what, req.id);
     case "setAutoLock": { const m = await vault.getMeta(); m.autoLockMinutes = Math.min(24 * 60, Math.max(1, Math.round(req.minutes))); await vault.setMeta(m); await vault.bumpAutoLock(); return null; }
     case "setApiBase": { const m = await vault.getMeta(); m.apiBase = req.url.replace(/\/$/, ""); await vault.setMeta(m); return null; }
-    case "signOwn": { const a = await signingAccount(); return signTxs(a.address, req.txs); }
+    case "signOwn": { const a = await signingAccount(); if (a.kind === "ledger") throw new Error("Ledger accounts sign on the device."); return signTxs(a.address, req.txs); }
     case "sendSigned": return sendRaw(req.tx);
     case "getPending": { const p = pending.get(req.id); if (!p) throw new Error("This request expired."); const { resolve: _r, windowId: _w, ...pub } = p; return pub; }
-    case "decide": decide(req.id, req.approve); return null;
+    case "decide": decide(req.id, req.approve, req.signed); return null;
     case "connectedSites": return Object.entries((await vault.getMeta()).sites).map(([origin, v]) => ({ origin, ...v }));
     case "disconnectSite": { const m = await vault.getMeta(); delete m.sites[req.origin]; await vault.setMeta(m); return null; }
   }

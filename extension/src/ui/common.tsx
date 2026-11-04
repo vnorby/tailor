@@ -36,7 +36,8 @@ export function extensionExecutor(state: WalletState, active: AccountMeta): Exec
     owner: active.address,
     canSign: active.kind !== "watch" && state.unlocked,
     signHint: <p className="text-[13px] text-dim">{active.kind === "watch" ? "This is a watch-only account. Switch to an account you own to sign." : "Unlock Tailor to sign."}</p>,
-    sign: (txs) => call<string[]>({ type: "signOwn", txs }),
+    // Ledger accounts sign on the device from this page; others in the background worker.
+    sign: (txs) => (active.kind === "ledger" ? import("~/ledger/ledger").then((l) => l.ledgerSignTxs(active.address, active.path!, txs)) : call<string[]>({ type: "signOwn", txs })),
   };
 }
 
@@ -81,7 +82,7 @@ export function AccountSwitcher({ state, active, onChanged }: { state: WalletSta
         <div className="absolute left-0 z-40 mt-1 w-72 card p-1.5 shadow-2xl">
           {state.accounts.map((a) => (
             <button key={a.id} className={`w-full flex items-center justify-between gap-2 rounded-lg px-2 py-2 text-left hover:bg-panel-2 ${a.id === state.activeId ? "bg-panel-2" : ""}`} onClick={() => act(() => call({ type: "setActive", id: a.id }))}>
-              <span className="text-[13px]">{a.name}{a.kind !== "derived" && <span className="ml-1 text-[10px] text-faint">{a.kind}</span>}</span>
+              <span className="text-[13px]">{a.name}{a.kind !== "derived" && <span className="ml-1 text-[10px] text-faint">{a.kind === "ledger" ? "Ledger" : a.kind}</span>}</span>
               <span className="num text-[11px] text-dim">{short(a.address)}</span>
             </button>
           ))}
@@ -96,6 +97,7 @@ export function AccountSwitcher({ state, active, onChanged }: { state: WalletSta
               <button className="w-full rounded-lg px-2 py-2 text-left text-[13px] hover:bg-panel-2" onClick={() => act(() => call({ type: "addAccount" }))}>+ New account</button>
               <button className="w-full rounded-lg px-2 py-2 text-left text-[13px] hover:bg-panel-2" onClick={() => setMode("import")}>Import private key</button>
               <button className="w-full rounded-lg px-2 py-2 text-left text-[13px] hover:bg-panel-2" onClick={() => setMode("watch")}>Watch an address</button>
+              <button className="w-full rounded-lg px-2 py-2 text-left text-[13px] hover:bg-panel-2" onClick={() => chrome.tabs.create({ url: "ledger.html" })}>Connect a Ledger</button>
             </>
           )}
           {err && <p className="px-2 pb-1 text-[12px] text-danger">{err}</p>}

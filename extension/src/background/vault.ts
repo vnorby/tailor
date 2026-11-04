@@ -130,6 +130,7 @@ export async function keypairFor(address: string): Promise<Keypair> {
   if (cached) return cached;
   const acct = (await getMeta()).accounts.find((a) => a.address === address);
   if (!acct || acct.kind === "watch") throw new Error("This account can't sign (watch-only or unknown).");
+  if (acct.kind === "ledger") throw new Error("This is a Ledger account: it signs on the device.");
   const kp = acct.kind === "derived" ? deriveAccount(s.mnemonic!, acct.index!) : keypairFromBase58(s.imported[acct.id]);
   if (kp.address !== address) throw new Error("Key mismatch.");
   keyCache.set(address, kp);
@@ -170,6 +171,21 @@ export async function addWatch(address: string, name?: string) {
   return acct;
 }
 
+/** Ledger accounts store only their address and device path; signing happens on the device. */
+export async function addLedger(accounts: { address: string; path: string }[]) {
+  const m = await getMeta();
+  let last: AccountMeta | null = null;
+  for (const a of accounts.slice(0, 10)) {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a.address) || bs58.decode(a.address).length !== 32 || !/^44'\/501'(\/\d+'){1,2}$/.test(a.path)) throw new Error("Invalid Ledger account.");
+    if (m.accounts.some((x) => x.address === a.address && x.kind === "ledger")) continue;
+    last = { id: crypto.randomUUID(), name: `Ledger ${m.accounts.filter((x) => x.kind === "ledger").length + 1}`, address: a.address, kind: "ledger", path: a.path };
+    m.accounts.push(last);
+  }
+  if (last) m.activeId = last.id;
+  await setMeta(m);
+  return last;
+}
+
 export async function removeAccount(id: string) {
   const m = await getMeta();
   if (m.accounts.length <= 1) throw new Error("You can't remove your only account.");
@@ -191,7 +207,7 @@ export async function reveal(password: string, what: "mnemonic" | "privateKey", 
   try { s = await open<Secrets>(sealed, key); } catch { throw new Error("Wrong password."); }
   if (what === "mnemonic") { if (!s.mnemonic) throw new Error("This wallet has no recovery phrase."); return s.mnemonic; }
   const acct = (await getMeta()).accounts.find((a) => a.id === id);
-  if (!acct || acct.kind === "watch") throw new Error("No private key for this account.");
+  if (!acct || acct.kind === "watch" || acct.kind === "ledger") throw new Error("No private key for this account.");
   const kp = acct.kind === "derived" ? deriveAccount(s.mnemonic!, acct.index!) : keypairFromBase58(s.imported[acct.id]);
   return bs58.encode(new Uint8Array([...kp.secretKey, ...kp.publicKey]));
 }
