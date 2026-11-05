@@ -12,6 +12,7 @@ import { connection, prices } from "@/lib/core/solana";
 import { KNOWN_PROGRAMS, previewTransaction, type Preview } from "@/lib/core/preview";
 import { checkDomain, type DomainCheck } from "./domains";
 import { decodeInstruction } from "@/lib/agent/idl";
+import { logUsage } from "@/lib/core/usage";
 
 export type Risk = "low" | "medium" | "high";
 export interface Explanation { summary: string; risk: Risk; points: string[]; advice: string; facts: { swapLossPct?: number; domain?: DomainCheck["verdict"] } }
@@ -122,6 +123,7 @@ export async function explainTransaction(base64Tx: string, owner: string, origin
         model: "claude-sonnet-5-5", max_tokens: 2000, output_config: { effort: "low", format: zodOutputFormat(Schema) }, system: SYSTEM,
         messages: [{ role: "user", content: `<tx>\n${JSON.stringify(facts)}\n</tx>` }],
       });
+      logUsage("explain", "claude-sonnet-5-5", res.usage);
       out = res.parsed_output ?? null;
     } catch { out = null; }
   }

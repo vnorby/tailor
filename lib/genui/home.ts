@@ -11,6 +11,7 @@ import { positionFacts, globalFacts } from "./facts";
 import { jsonObjects } from "./jsonstream";
 import { defaultCard } from "./cards";
 import { sanitizeCard, type Card } from "./spec";
+import { logUsage } from "@/lib/core/usage";
 
 export interface Profile { activities: string[]; style?: string }
 
@@ -171,7 +172,8 @@ export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Pre
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     output_config: { effort: "low" },
-    system: SYSTEM,
+    // The designer brief is shared by every user: cache it.
+    system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: `<wallet>\n${JSON.stringify(input)}\n</wallet>\n\n${request ? `The user says: <request>${request.slice(0, 1000)}</request>` : "Build this user's wallet home."}` }],
   });
 
@@ -213,6 +215,7 @@ export async function* generateHome(snap: Snapshot, tools: ToolDef[], prefs: Pre
         }
       }
     }
+    void stream.finalMessage().then((m) => logUsage("home", "claude-sonnet-5-5", m.usage)).catch(() => {});
   } catch (e) {
     console.error("home generation failed:", e);
     if (!home.sections.length) { yield* fallback(snap, prefs, home); return; }

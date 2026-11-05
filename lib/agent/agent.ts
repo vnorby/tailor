@@ -19,6 +19,7 @@ import { generateTheme, type Theme } from "@/lib/genui/theme";
 import { buildAnchorIx, decodeAnchorAccount, fetchIdl, summarizeIdl } from "./idl";
 import { verifyIntent, verifyToolParams } from "./verify";
 import { MARKET_TOOL, marketData } from "./market";
+import { logUsage } from "@/lib/core/usage";
 
 export type AgentEvent =
   | { type: "status"; text: string; source: "ai" }
@@ -241,7 +242,11 @@ export async function* runAgent(opts: { snap: Snapshot; tools: ToolDef[]; prefs:
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const stream = client.beta.messages.stream({
-      model: "claude-opus-5-5", max_tokens: 16000, system: SYSTEM, tools: TOOLS, messages,
+      model: "claude-opus-5-5", max_tokens: 16000, tools: TOOLS, messages,
+      // Tools + system are identical for every user and turn: one cache point after them, plus
+      // automatic caching for the growing conversation so each tool-loop turn reuses the last.
+      system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
+      cache_control: { type: "ephemeral" },
       output_config: { effort: "medium" },
       betas: ["server-side-fallback-2026-07-01"], fallbacks: "default",
     });
@@ -252,6 +257,7 @@ export async function* runAgent(opts: { snap: Snapshot; tools: ToolDef[]; prefs:
       if (ev.type === "content_block_start" && ev.content_block.type === "server_tool_use") yield { type: "status", text: "Searching the web", source: "ai" };
     }
     const msg = await stream.finalMessage();
+    logUsage("agent", "claude-opus-5-5", msg.usage);
     if (msg.stop_reason === "refusal") { yield { type: "error", error: "Tailor couldn't help with that request." }; return; }
     // Keep the full content (incl. thinking) so the next turn continues the same reasoning.
     messages.push({ role: "assistant", content: msg.content });

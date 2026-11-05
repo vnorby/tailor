@@ -6,6 +6,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { jsonObjects } from "./jsonstream";
+import { logUsage } from "@/lib/core/usage";
 
 export const FONTS = {
   sans: ["Inter Tight", "Space Grotesk", "DM Sans", "Manrope", "IBM Plex Sans", "Sora"],
@@ -117,5 +118,6 @@ export async function* generateTheme(input: { activities: string[]; style: strin
     if (ev.type !== "content_block_delta" || ev.delta.type !== "text_delta") continue;
     for (const o of parser.push(ev.delta.text)) { const e = handle(o as Record<string, unknown>); if (e) yield e; }
   }
+  void stream.finalMessage().then((f) => logUsage("theme", "claude-sonnet-5-5", f.usage)).catch(() => {});
   if (!gotTheme) yield { type: "theme", theme: DEFAULT_THEME };
 }

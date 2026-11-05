@@ -8,6 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { isAddress, jupHeaders, jupBase } from "@/lib/core/solana";
+import { logUsage } from "@/lib/core/usage";
 
 export interface PageRead { url: string; title: string; selection?: string; text: string; cashtags?: string[]; addresses?: string[] }
 export interface MarketSuggestion { question: string; outcome: string; prob: number; volume: number; url: string; why: string }
@@ -105,6 +106,7 @@ async function findMarkets(page: PageRead, queries: string[]): Promise<MarketSug
     model: "claude-sonnet-5-5", max_tokens: 600, output_config: { effort: "low", format: zodOutputFormat(MarketPicks) }, system: MARKET_SYSTEM,
     messages: [{ role: "user", content: `<page>\ntitle: ${page.title}\n${page.selection ? `selected: ${page.selection}\n` : ""}text: ${page.text.slice(0, 2500)}\n</page>\n<markets>\n${cands.map((c, i) => `${i}. ${c.market.question} (Yes ${Math.round(c.prob * 100)}%, event volume $${Math.round(Number(c.event.volume ?? 0))})`).join("\n")}\n</markets>` }],
   });
+  logUsage("suggest:markets", "claude-sonnet-5-5", res.usage);
   return (res.parsed_output?.picks ?? []).flatMap((p) => {
     const c = cands[p.market];
     return c ? [{ question: c.market.question, outcome: "Yes", prob: c.prob, volume: Number(c.event.volume ?? 0), url: `https://polymarket.com/event/${c.event.slug}`, why: p.why.slice(0, 60) }] : [];
@@ -120,6 +122,7 @@ export async function suggest(page: PageRead, holdings: Map<string, number>): Pr
       model: "claude-sonnet-5-5", max_tokens: 1000, output_config: { effort: "low", format: zodOutputFormat(Picks) }, system: SYSTEM,
       messages: [{ role: "user", content: `<page>\nurl: ${page.url}\ntitle: ${page.title}\n${page.selection ? `selected: ${page.selection}\n` : ""}cashtags: ${(page.cashtags ?? []).join(" ")}\naddresses: ${(page.addresses ?? []).join(" ")}\ntext: ${page.text.slice(0, 5000)}\n</page>` }],
     });
+    logUsage("suggest", "claude-sonnet-5-5", res.usage);
     out = res.parsed_output ?? { picks: [], marketQueries: [] };
     cache.set(key, { at: Date.now(), out });
     if (cache.size > 500) cache.delete(cache.keys().next().value!);
